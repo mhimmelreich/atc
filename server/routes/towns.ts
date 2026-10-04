@@ -141,13 +141,16 @@ const escapeRe = (s: string) => s.replace(/[\\^$.*+?()[\]{}|"]/g, (c) => (c === 
  * die Stadt auf Ebene 6. Ohne passende Grenze bleibt es beim Namen.
  */
 async function fetchTowns(lat: number, lon: number): Promise<Town[]> {
-  const nodes = await overpass(`[out:json][timeout:110];node(around:${RADIUS_M},${lat},${lon})[place~"^(city|town|village)$"][name][population](if:number(t["population"])>=${TOWN_MIN_POP});out tags qt;`);
+  // Rechteck statt Umkreis: für Overpass deutlich schneller, vor allem bei Grenz-Relationen
+  const dLat = RADIUS_M / 111_000, dLon = dLat / Math.cos((lat * Math.PI) / 180);
+  const bbox = `${(lat - dLat).toFixed(3)},${(lon - dLon).toFixed(3)},${(lat + dLat).toFixed(3)},${(lon + dLon).toFixed(3)}`;
+  const nodes = await overpass(`[out:json][timeout:110];node(${bbox})[place~"^(city|town|village)$"][name][population](if:number(t["population"])>=${TOWN_MIN_POP});out tags qt;`);
   const towns = nodes.map((n) => ({ name: n.tags!.name, pop: popOf(n.tags), lat: n.lat!, lng: n.lon! })).filter((t) => t.pop >= TOWN_MIN_POP);
   const names = [...new Set(towns.map((t) => t.name))];
   const rels: OsmElement[] = [];
   for (let i = 0; i < names.length; i += 150) {
     const re = names.slice(i, i + 150).map(escapeRe).join('|');
-    rels.push(...await overpass(`[out:json][timeout:110];rel(around:${RADIUS_M + 30_000},${lat},${lon})[boundary=administrative][admin_level~"^(6|8)$"][name~"^(${re})$"];out geom qt;`));
+    rels.push(...await overpass(`[out:json][timeout:110];rel(${bbox})[boundary=administrative][admin_level~"^(6|8)$"][name~"^(${re})$"];out geom qt;`));
   }
   const bounds = rels
     .filter((r) => r.tags?.admin_level === '8' || (r.tags?.['de:place'] !== 'county' && !/kreis/i.test(r.tags?.name ?? '')))
