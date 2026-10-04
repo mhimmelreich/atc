@@ -137,7 +137,7 @@ function Approach() {
         ]} />
       </Phase>
       <Phase n={5} title="Endanflug und Landefreigabe">
-        <P>Auf dem Endanflug hältst du mindestens 3 NM Abstand zum Vordermann. Die Landefreigabe gibt nur der Turm: erst nach CONTACT TOWER, sobald die Bahn frei ist, mit dem aktuellen Bodenwind. Fehlt sie, erinnert der Pilot 4 NM vor der Schwelle daran; bei 1 NM startet er durch.</P>
+        <P>Auf dem Endanflug hältst du mindestens 3 NM Abstand zum Vordermann (2,5 NM ab 10 NM vor der Schwelle), hinter Heavy und Super mehr wegen der Wirbelschleppen. Die Landefreigabe gibt nur der Turm: erst nach CONTACT TOWER, sobald die Bahn frei ist, mit dem aktuellen Bodenwind. Fehlt sie, erinnert der Pilot 4 NM vor der Schwelle daran; bei 1 NM startet er durch.</P>
         <Radio lines={[
           ['PILOT', 'Lufthansa 427, 4 miles final runway 25R'],
           ['TWR', 'Lufthansa 427, wind 250° 8 kt, runway 25R, cleared to land'],
@@ -218,11 +218,13 @@ function Separation() {
         rows={[
           ['Staffelung unterschritten', 'unter 3 NM seitlich und unter 1000 ft Höhe', 'rot'],
           ['Warnung', 'unter 5 NM seitlich und unter 2000 ft Höhe', 'gelb'],
+          ['Endanflug, gleiche Bahn', 'Wirbelschleppen-Abstand zum Vordermann, mindestens 3 NM (2,5 NM innerhalb 10 NM vor der Schwelle); Höhe zählt nicht', 'rot darunter, gelb bis 1 NM darüber'],
+          ['Endanflug, Parallelbahnen', 'beide auf ihrem Localizer: keine Staffelung nötig', '—'],
         ]}
       />
       <P>Es reicht, wenn einer der beiden Abstände eingehalten ist: Zwei Flieger übereinander mit 1000 ft Unterschied sind gestaffelt.</P>
       <P>Bei LIVE gilt das auch gegenüber den echten Fliegern, außer im Endanflug: Hat dein Flieger die ILS-Freigabe, zählen echte Flieger innerhalb von 15 NM um den Platz nicht mehr.</P>
-      <P><B>Wirbelschleppen:</B> Hinter schweren Fliegern (H = Heavy, J = Super wie der A380) halten echte Lotsen 4 bis 6 NM Abstand. Das Spiel wertet nur die 3 NM, zeigt die Klasse aber auf dem Streifen.</P>
+      <P><B>Wirbelschleppen im Endanflug (ICAO):</B> Heavy hinter Heavy 4 NM, Medium hinter Heavy 5 NM, Heavy hinter Super (A380) 6 NM, Medium hinter Super 7 NM. Die Klasse steht auf dem Streifen (H, J).</P>
       <H>PUNKTE</H>
       <Table
         head={['EREIGNIS', 'PUNKTE']}

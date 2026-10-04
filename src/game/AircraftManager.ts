@@ -52,6 +52,17 @@ const TOWER_CALL_MAX_S = 6;
 const ORIGIN_MIN_NM = 150;
 // Bahnwechsel: neue STAR nur über einen Punkt in diesem Umkreis vor dem Flieger
 const RESTAR_SEARCH_NM = 40;
+// Endanflug: 2,5 NM statt 3 NM, wenn beide höchstens 10 NM vor der Schwelle sind; gelb bis 1 NM über dem Minimum
+const REDUCED_SEP_NM = 2.5;
+const REDUCED_SEP_WITHIN_NM = 10;
+const FINAL_WARN_MARGIN_NM = 1;
+
+/** Wirbelschleppen-Abstand (ICAO Doc 4444) zwischen Vordermann und Folgendem; 0 = nur Radarstaffelung */
+function wakeSpacingNM(lead: 'M' | 'H' | 'J', follow: 'M' | 'H' | 'J'): number {
+  if (lead === 'J') return follow === 'J' ? 0 : follow === 'H' ? 6 : 7;
+  if (lead === 'H') return follow === 'M' ? 5 : 4;
+  return 0;
+}
 // Direkt zum neuen STAR-Punkt nicht quer über den Platz: Mindestabstand der Strecke zum Platz
 const RESTAR_FIELD_CLEAR_NM = 6;
 
@@ -463,7 +474,10 @@ export class AircraftManager {
     const check = (a: Traffic, b: Traffic) => {
       const lat = distanceNM(a.lat, a.lng, b.lat, b.lng);
       const vert = Math.abs(a.altitudeFt - b.altitudeFt);
-      const type = lat < SEP_LATERAL_NM && vert < SEP_VERTICAL_FT ? 'conflict'
+      // Beide im Endanflug: eigene Regeln (Wirbelschleppen auf derselben Bahn, Parallelbahnen unabhängig)
+      const fin = this.finalSeparation(a, b, lat);
+      const type = fin !== undefined ? fin
+        : lat < SEP_LATERAL_NM && vert < SEP_VERTICAL_FT ? 'conflict'
         : lat < WARN_LATERAL_NM && vert < WARN_VERTICAL_FT ? 'warning'
         : null;
       if (!type) return;
@@ -504,6 +518,29 @@ export class AircraftManager {
   }
 
   /** Im Endanflug lotst bei echtem Verkehr der echte Tower; Parallelanflüge wären sonst ständig "Konflikte" */
+  /**
+   * Staffelung zweier eigener Flieger, die beide auf dem Localizer etabliert sind; undefined = normale Regel.
+   * Parallelbahnen: keine Warnung. Dieselbe Bahn: Wirbelschleppen-Abstand hinter dem Vordermann (ICAO),
+   * sonst 3 NM bzw. 2,5 NM innerhalb 10 NM vor der Schwelle; gelb bis 1 NM über dem Minimum.
+   */
+  private finalSeparation(a: Traffic, b: Traffic, lat: number): 'conflict' | 'warning' | null | undefined {
+    const acA = this.aircraft.get(a.id), acB = this.aircraft.get(b.id);
+    if (!acA || !acB || !this.airport) return undefined;
+    const onFinal = (ac: Aircraft) => ac.state === 'established' && ac.clearedILS && ac.assignedRunway;
+    if (!onFinal(acA) || !onFinal(acB)) return undefined;
+    if (acA.assignedRunway !== acB.assignedRunway) return null;
+    const rwy = this.airport.runways.find((r) => r.id === acA.assignedRunway);
+    if (!rwy) return undefined;
+    const dA = distanceNM(acA.lat, acA.lng, rwy.thresholdLat, rwy.thresholdLng);
+    const dB = distanceNM(acB.lat, acB.lng, rwy.thresholdLat, rwy.thresholdLng);
+    const [lead, follow] = dA <= dB ? [acA, acB] : [acB, acA];
+    const required = Math.max(
+      wakeSpacingNM(typeData(lead.type).wake, typeData(follow.type).wake),
+      Math.max(dA, dB) <= REDUCED_SEP_WITHIN_NM ? REDUCED_SEP_NM : SEP_LATERAL_NM,
+    );
+    return lat < required ? 'conflict' : lat < required + FINAL_WARN_MARGIN_NM ? 'warning' : null;
+  }
+
   private finalZone(ac: Aircraft, o: Traffic): boolean {
     return ac.clearedILS && !!this.airport && distanceNM(o.lat, o.lng, this.airport.lat, this.airport.lng) < FINAL_ZONE_NM;
   }
