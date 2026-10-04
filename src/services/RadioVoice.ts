@@ -7,7 +7,6 @@ const MAX_QUEUE = 6;      // ein Kanal: bei Stau die ältesten Meldungen verwerf
 const STALE_MS = 25_000;  // so alte Meldungen nicht mehr abspielen
 const GAP_MS = 350;       // Pause zwischen zwei Sprechern
 const PREFETCH = 2;
-const SQUELCH_LEVEL = 0.07; // Spitze des Rauschschwanzes nach dem Loslassen der Sendetaste
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -32,7 +31,7 @@ function driveCurve(amount: number): Float32Array<ArrayBuffer> {
 export class RadioVoice {
   private ctx: AudioContext | null = null;
   private noise: AudioBuffer | null = null;
-  private clickSound: AudioBuffer | null = null;
+  private clicks = new Map<number, AudioBuffer>();
   private queue: RadioMessage[] = [];
   private buffers = new Map<number, Promise<AudioBuffer | null>>();
   private playing = false;
@@ -139,31 +138,29 @@ export class RadioVoice {
       .connect(level)
       .connect(out);
 
-    // Rauschen während der Sendung; beim Loslassen der Sendetaste ein kurzer, weicher Rauschschwanz (Squelch)
+    // Rauschen während der Sendung, endet mit dem Loslassen der Sendetaste
     const noise = ctx.createBufferSource();
     noise.buffer = this.noiseBuffer(ctx);
     noise.loop = true;
     const hiss = ctx.createGain();
     const n = pilot ? 0.04 : 0.02;
-    const tail = 0.12 + Math.random() * 0.06;
     hiss.gain.setValueAtTime(0, t0 - 0.05);
     hiss.gain.linearRampToValueAtTime(n, t0);
-    hiss.gain.setValueAtTime(n, end);
-    hiss.gain.linearRampToValueAtTime(SQUELCH_LEVEL, end + 0.015);
-    hiss.gain.setTargetAtTime(0, end + 0.03, tail / 4);
+    hiss.gain.setValueAtTime(0, end + 0.004);
     noise
       .connect(biquad(ctx, 'highpass', 500, 0.7))
       .connect(biquad(ctx, 'lowpass', 2400, 0.7))
       .connect(hiss)
       .connect(out);
 
-    // Klick der Sendetaste: leise beim Drücken, deutlich beim Loslassen
-    this.click(ctx, out, t0 - 0.05, 0.25);
-    this.click(ctx, out, end, 0.6);
+    // Mechanische Sendetaste: leiser Klick beim Drücken, "klick-klack" beim Loslassen
+    this.click(ctx, out, t0 - 0.05, 2800, 0.25);
+    this.click(ctx, out, end, 2800, 0.6);
+    this.click(ctx, out, end + 0.035, 1700, 0.45);
 
     noise.start(t0 - 0.05);
     voice.start(t0);
-    noise.stop(end + 0.03 + tail);
+    noise.stop(end + 0.1);
     return new Promise((resolve) => {
       noise.onended = () => {
         this.stopCurrent = null;
@@ -176,27 +173,25 @@ export class RadioVoice {
     });
   }
 
-  private click(ctx: AudioContext, out: AudioNode, at: number, level: number): void {
+  /** Kontaktklick: gedämpfte Schwingung mit kurzem Impuls (etwa 12 ms) */
+  private click(ctx: AudioContext, out: AudioNode, at: number, freq: number, level: number): void {
+    let buffer = this.clicks.get(freq);
+    if (!buffer) {
+      const len = Math.round(ctx.sampleRate * 0.012);
+      buffer = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        const t = i / ctx.sampleRate;
+        data[i] = (Math.sin(2 * Math.PI * freq * t) * 0.8 + (i < 12 ? 1 : 0)) * Math.exp(-t / 0.0018);
+      }
+      this.clicks.set(freq, buffer);
+    }
     const src = ctx.createBufferSource();
-    src.buffer = this.clickBuffer(ctx);
+    src.buffer = buffer;
     const gain = ctx.createGain();
     gain.gain.value = level;
-    src.connect(biquad(ctx, 'highpass', 400, 0.7)).connect(gain).connect(out);
+    src.connect(biquad(ctx, 'highpass', 300, 0.7)).connect(gain).connect(out);
     src.start(at);
-  }
-
-  /** Kurzer Knack (etwa 6 ms): Rechteckimpuls mit Rauschen, schnell abklingend */
-  private clickBuffer(ctx: AudioContext): AudioBuffer {
-    if (!this.clickSound) {
-      const len = Math.round(ctx.sampleRate * 0.006);
-      this.clickSound = ctx.createBuffer(1, len, ctx.sampleRate);
-      const data = this.clickSound.getChannelData(0);
-      for (let i = 0; i < len; i++) {
-        const decay = Math.exp(-i / (len / 5));
-        data[i] = ((i < len / 12 ? 1 : 0) + (Math.random() * 2 - 1) * 0.6) * decay;
-      }
-    }
-    return this.clickSound;
   }
 
   private noiseBuffer(ctx: AudioContext): AudioBuffer {
