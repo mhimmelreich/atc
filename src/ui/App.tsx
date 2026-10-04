@@ -14,6 +14,7 @@ import { AlertBanner } from './AlertBanner';
 import { ScorePanel } from './ScorePanel';
 import { ContextMenu, type ContextMenuState } from './ContextMenu';
 import { RadioLog } from './RadioLog';
+import { HowTo } from './HowTo';
 import { RadioVoice } from '@/services/RadioVoice';
 import { loadTelephony } from '@/game/Telephony';
 
@@ -112,6 +113,8 @@ export function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BREAKPOINT);
   const [bottomOpen, setBottomOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const closeHelp = useCallback(() => setShowHelp(false), []);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
@@ -200,7 +203,10 @@ export function App() {
       maxHeight: isMobile ? '60vh' : undefined,
     }}>
 
-      <a href="https://games.himmelreich.cloud/" style={{ color: '#446644', fontSize: 11, letterSpacing: 1, textDecoration: 'none', whiteSpace: 'nowrap' }}>← ALLE SPIELE</a>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <a href="https://games.himmelreich.cloud/" style={{ color: '#446644', fontSize: 11, letterSpacing: 1, textDecoration: 'none', whiteSpace: 'nowrap' }}>← ALLE SPIELE</a>
+        <button onClick={() => setShowHelp(true)} title="Was macht ein Lotse? Befehle, Funk, Punkte" style={HELP_BUTTON}>? HOWTO</button>
+      </div>
 
       {/* Airport selector */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -386,6 +392,7 @@ export function App() {
           <div style={{ display: 'flex', gap: 10, fontSize: 11, color: '#446644' }}>
             <span style={{ color: gameState.score >= 0 ? '#00ff88' : '#ff3333' }}>{gameState.score}</span>
             <span>{gameState.landings} LND</span>
+            <button onClick={() => setShowHelp(true)} title="HowTo" style={HELP_BUTTON}>?</button>
             <button onClick={() => setBottomOpen((o) => !o)} style={{ background: bottomOpen ? '#0a2a18' : 'transparent', border: '1px solid #1a4428', color: '#00cc66', padding: '2px 8px', fontFamily: '"Courier New", monospace', fontSize: 11, cursor: 'pointer', borderRadius: 2 }}>
               {bottomOpen ? '▲ RADAR' : '▼ CTRL'}
             </button>
@@ -436,9 +443,17 @@ export function App() {
       )}
 
       {(!isMobile || bottomOpen) && sidebar}
+
+      {showHelp && <HowTo onClose={closeHelp} />}
     </div>
   );
 }
+
+const HELP_BUTTON: React.CSSProperties = {
+  background: 'transparent', border: '1px solid #1a4428', color: '#00cc66',
+  fontFamily: '"Courier New", monospace', fontSize: 11, padding: '2px 8px',
+  cursor: 'pointer', borderRadius: 2, letterSpacing: 1,
+};
 
 // ── Display toggle bar ────────────────────────────────────────────────────────
 const DISPLAY_TOGGLES: { key: keyof DisplayOptions; label: string }[] = [

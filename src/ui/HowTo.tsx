@@ -1,0 +1,307 @@
+// filepath: src/ui/HowTo.tsx
+// ATC-HowTo: was ein Lotse in welcher Flugphase tut, mit den Befehlen des Spiels und Funk-Beispielen
+import { useEffect, useState, type ReactNode } from 'react';
+import { NATO } from '@/game/Speech';
+
+const FONT = '"Courier New", monospace';
+const C = {
+  head: '#00ff88', text: '#b8d8c0', dim: '#5a8a68', line: '#1a4428',
+  atc: '#a8d8ff', atcTag: '#55bbff', pilot: '#b8e8c8', pilotTag: '#00cc66',
+};
+
+const TABS = ['Überblick', 'Anflug', 'Befehle', 'Sprechfunk', 'Staffelung', 'Bedienung', 'Quellen'] as const;
+type Tab = typeof TABS[number];
+
+const H = ({ children }: { children: ReactNode }) => (
+  <div style={{ color: C.head, fontWeight: 'bold', fontSize: 13, letterSpacing: 1, margin: '14px 0 6px' }}>{children}</div>
+);
+const P = ({ children }: { children: ReactNode }) => <p style={{ margin: '0 0 8px' }}>{children}</p>;
+const B = ({ children }: { children: ReactNode }) => <b style={{ color: C.head, fontWeight: 'normal' }}>{children}</b>;
+
+/** Funk-Beispiel wie im Funk-Log: ATC blau, Pilot grün */
+function Radio({ lines }: { lines: Array<['ATC' | 'PILOT', string]> }) {
+  return (
+    <div style={{ background: '#030a05', border: `1px solid ${C.line}`, borderRadius: 3, padding: '5px 8px', margin: '6px 0 8px', fontSize: 11 }}>
+      {lines.map(([who, text], i) => (
+        <div key={i} style={{ display: 'flex', gap: 8 }}>
+          <span style={{ color: who === 'ATC' ? C.atcTag : C.pilotTag, width: 42, flexShrink: 0, fontWeight: 'bold' }}>{who}</span>
+          <span style={{ color: who === 'ATC' ? C.atc : C.pilot }}>{text}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Table({ head, rows }: { head: string[]; rows: ReactNode[][] }) {
+  const cell: React.CSSProperties = { borderBottom: `1px solid ${C.line}`, padding: '4px 6px', verticalAlign: 'top', textAlign: 'left' };
+  return (
+    <div style={{ overflowX: 'auto', margin: '6px 0 10px' }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+        <thead>
+          <tr>{head.map((h) => <th key={h} style={{ ...cell, color: C.dim, fontWeight: 'normal', letterSpacing: 1 }}>{h}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} style={cell}>{c}</td>)}</tr>)}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Phase({ n, title, children }: { n: number; title: string; children: ReactNode }) {
+  return (
+    <div style={{ borderLeft: `2px solid ${C.line}`, paddingLeft: 10, margin: '10px 0 14px' }}>
+      <div style={{ color: C.head, fontWeight: 'bold', marginBottom: 4 }}>{n}. {title}</div>
+      {children}
+    </div>
+  );
+}
+
+function Overview() {
+  return (
+    <>
+      <H>WER MACHT WAS</H>
+      <P>Ein Flug geht durch mehrere Lotsen-Stellen. Jede hat ihre eigene Frequenz und gibt den Flieger an die nächste weiter.</P>
+      <Table
+        head={['STELLE', 'AUFGABE']}
+        rows={[
+          ['Delivery', 'Streckenfreigabe vor dem Start (Route, SID, Transpondercode)'],
+          ['Ground', 'Rollen zwischen Parkposition und Bahn'],
+          ['Tower', 'Start- und Landefreigaben, alles auf und direkt über der Bahn'],
+          ['Departure', 'Steigflug nach dem Start, Übergabe an die Strecke'],
+          ['Center', 'Reiseflug auf der Strecke, Sinkflug bis in den Anflugbereich'],
+          [<B key="a">Approach</B>, 'Anflug: von der STAR per Radarführung auf das ILS, Abstände auf dem Endanflug'],
+        ]}
+      />
+      <H>DEINE ROLLE IM SPIEL</H>
+      <P>Du bist <B>Approach und Tower</B> zugleich. Die Flieger kommen auf ihrer STAR in deinen Bereich und melden sich bei dir. Deine Aufgabe: sie sicher gestaffelt hintereinander auf den Endanflug bringen, das ILS freigeben und die Landung freigeben.</P>
+      <P>Gut gemacht ist es, wenn keiner durchstarten muss und sich nie zwei Flieger zu nahe kommen.</P>
+    </>
+  );
+}
+
+function Approach() {
+  return (
+    <>
+      <P>So läuft ein Anflug ab, von der Meldung bis zur Landung. Die Funksprüche sind Beispiele aus dem Spiel.</P>
+      <Phase n={1} title="Erstanruf">
+        <P>Der Pilot meldet sich mit Höhe, STAR und dem Buchstaben der Wetterinformation (ATIS). Mit deinem ersten Befehl bestätigst du den Radarkontakt; das sagt das Spiel automatisch dazu.</P>
+        <Radio lines={[
+          ['PILOT', 'Frankfurt Approach, Lufthansa 427, FL120 descending FL100, KERAX 6A arrival, information Delta'],
+          ['ATC', 'Lufthansa 427, radar contact, descend FL080'],
+          ['PILOT', 'Descend FL080, Lufthansa 427'],
+        ]} />
+      </Phase>
+      <Phase n={2} title="Anflugstrecke (STAR)">
+        <P>Der Flieger folgt der STAR mit ihren Höhen- und Geschwindigkeitsvorgaben. Du gibst den Sinkflug frei, kürzt per Direct-to ab oder weist eine andere STAR zu. Unter FL100 sind höchstens 250 kt üblich.</P>
+        <P>Unterhalb der <B>Übergangshöhe</B> (in Deutschland meist 5000 ft) gibt es keine Flugflächen mehr, sondern Höhen über dem Meer. Mit der ersten Höhe darunter nennst du das QNH (Luftdruck).</P>
+        <Radio lines={[
+          ['ATC', 'Lufthansa 427, proceed direct KERAX, then KERAX 6A arrival, expect runway 25R'],
+          ['ATC', 'Lufthansa 427, descend 5000 ft, QNH 1014'],
+        ]} />
+      </Phase>
+      <Phase n={3} title="Radarführung (Vektoren)">
+        <P>Für die Reihenfolge auf dem Endanflug führst du die Flieger mit Kursen: Gegenanflug parallel zur Bahn, dann Queranflug, dann Eindrehen. Ziel ist ein Abfangkurs von höchstens 30° zum Endanflug, etwa 10 bis 15 NM vor der Schwelle, auf 3000 bis 4000 ft.</P>
+        <P>Mit der Geschwindigkeit regelst du die Abstände: Gegenanflug etwa 220 kt, Queranflug 180 kt, Endanflug 160 kt.</P>
+        <Radio lines={[
+          ['ATC', 'Lufthansa 427, turn left heading 160'],
+          ['ATC', 'Lufthansa 427, reduce speed 180 kt'],
+        ]} />
+      </Phase>
+      <Phase n={4} title="ILS-Freigabe">
+        <P>Liegt der Flieger auf dem Abfangkurs, gibst du das ILS frei. Er fängt den Localizer (Streifen <B>INT</B>), dann den Gleitpfad (<B>EST</B>) und sinkt selbstständig.</P>
+        <Radio lines={[
+          ['ATC', 'Lufthansa 427, cleared ILS approach runway 25R'],
+          ['PILOT', 'Cleared ILS approach runway 25R, Lufthansa 427'],
+          ['PILOT', 'Lufthansa 427, established ILS runway 25R'],
+        ]} />
+      </Phase>
+      <Phase n={5} title="Endanflug und Landefreigabe">
+        <P>Auf dem Endanflug hältst du mindestens 3 NM Abstand zum Vordermann. Die Landefreigabe gibst du, sobald die Bahn frei ist. Fehlt sie, erinnert der Pilot 4 NM vor der Schwelle daran; bei 1 NM startet er durch.</P>
+        <Radio lines={[
+          ['PILOT', 'Lufthansa 427, 4 miles final runway 25R'],
+          ['ATC', 'Lufthansa 427, runway 25R, cleared to land'],
+          ['PILOT', 'Cleared to land runway 25R, Lufthansa 427'],
+        ]} />
+      </Phase>
+      <Phase n={6} title="Durchstarten">
+        <P>Der Flieger fliegt geradeaus weiter und steigt auf 4000 ft. Seine Freigaben sind weg: du reihst ihn mit Kursen neu ein und gibst das ILS noch einmal frei.</P>
+        <Radio lines={[['PILOT', 'Lufthansa 427, going around'], ['ATC', 'Lufthansa 427, turn right heading 340, climb 4000 ft']]} />
+      </Phase>
+      <P>In echt übergibt der Tower nach der Landung an Ground. Im Spiel endet der Flug mit dem Aufsetzen.</P>
+    </>
+  );
+}
+
+function Commands() {
+  return (
+    <>
+      <P>Befehle gibst du rechts im Feld COMMANDS oder per Rechtsklick auf den Flieger (Kontextmenü). Der Pilot reagiert nach 1 bis 3 Sekunden.</P>
+      <Table
+        head={['BEFEHL', 'EINGABE', 'FUNK']}
+        rows={[
+          ['Kurs', <>HDG: <B>270</B>; <B>r090</B> oder <B>l090</B> erzwingt die Drehrichtung; im Menü L30, L90, R90, R30</>, 'turn left heading 270'],
+          ['Höhe', <>ALT: <B>FL80</B> oder <B>4000</B> (Fuß)</>, 'descend FL080 / descend 4000 ft, QNH 1014'],
+          ['Geschwindigkeit', <>SPD: <B>180</B></>, 'reduce speed 180 kt'],
+          ['Direct-to', 'Menü DIRECT TO, Wegpunkt antippen oder eintippen', 'proceed direct KERAX'],
+          ['Anflugpunkt und STAR', 'Menü ENTRY → STAR: Punkt wählen, dann STAR und Bahn', 'proceed direct KERAX, then KERAX 6A arrival, expect runway 25R'],
+          ['ILS', 'Knopf ILS RWY oder Menü RUNWAY / ILS', 'cleared ILS approach runway 25R'],
+          ['Landefreigabe', 'Knopf CLEARED TO LAND, erscheint nach der ILS-Freigabe', 'runway 25R, cleared to land'],
+        ]}
+      />
+      <H>STATUS AUF DEM STREIFEN</H>
+      <Table
+        head={['KÜRZEL', 'BEDEUTUNG']}
+        rows={[
+          ['ENR', 'fliegt die STAR oder geradeaus'],
+          ['VCT', 'wird mit Kursen geführt'],
+          ['INT', 'fängt den Localizer'],
+          ['EST', 'auf dem ILS, sinkt auf dem Gleitpfad'],
+          ['G/A', 'startet durch'],
+        ]}
+      />
+    </>
+  );
+}
+
+function Phraseology() {
+  return (
+    <>
+      <H>GRUNDREGELN</H>
+      <P><B>Wer, an wen:</B> Der Lotse beginnt mit dem Rufzeichen des Fliegers. Der Pilot liest zurück und hängt sein Rufzeichen ans Ende.</P>
+      <P><B>Rücklesen:</B> Höhen, Kurse, Geschwindigkeiten, Bahn und Freigaben muss der Pilot wiederholen. So fallen Hörfehler auf.</P>
+      <P><B>Rufzeichen:</B> Gesprochen wird der Funkname der Airline, nicht das Kürzel: DLH ist Lufthansa, BAW ist Speedbird, EZY ist Easy, CFG ist Condor.</P>
+      <P><B>Zahlen:</B> Ziffern einzeln, mit den Funk-Aussprachen tree (3), fife (5) und niner (9). Kurs 090 ist „heading zero niner zero“.</P>
+      <P><B>Höhen:</B> Über der Übergangshöhe Flugflächen („flight level eight zero“, volle Hunderter als „flight level one hundred“), darunter Fuß mit QNH („altitude four thousand feet“).</P>
+      <P><B>ATIS:</B> Die Wetter- und Platzinformation trägt einen Buchstaben. Der Pilot nennt ihn beim Erstanruf, damit klar ist, dass er das aktuelle Wetter kennt.</P>
+      <H>BUCHSTABIERALPHABET</H>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '2px 10px', fontSize: 11 }}>
+        {Object.entries(NATO).map(([letter, word]) => (
+          <span key={letter}><B>{letter}</B> {word}</span>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function Separation() {
+  return (
+    <>
+      <H>MINDESTABSTÄNDE</H>
+      <Table
+        head={['FALL', 'GRENZE', 'ANZEIGE']}
+        rows={[
+          ['Staffelung unterschritten', 'unter 3 NM seitlich und unter 1000 ft Höhe', 'rot'],
+          ['Warnung', 'unter 5 NM seitlich und unter 2000 ft Höhe', 'gelb'],
+        ]}
+      />
+      <P>Es reicht, wenn einer der beiden Abstände eingehalten ist: Zwei Flieger übereinander mit 1000 ft Unterschied sind gestaffelt.</P>
+      <P><B>Wirbelschleppen:</B> Hinter schweren Fliegern (H = Heavy, J = Super wie der A380) halten echte Lotsen 4 bis 6 NM Abstand. Das Spiel wertet nur die 3 NM, zeigt die Klasse aber auf dem Streifen.</P>
+      <H>PUNKTE</H>
+      <Table
+        head={['EREIGNIS', 'PUNKTE']}
+        rows={[
+          ['Landung', '+100'],
+          ['Durchstarten', '−30'],
+          ['Staffelung unterschritten (je Paar, höchstens alle 10 s)', '−200'],
+        ]}
+      />
+      <H>TIPPS</H>
+      <P>Früh sortieren: Lege die Reihenfolge fest, solange die Flieger noch weit weg sind, und staffle sie in der Höhe.</P>
+      <P>Geschwindigkeit ist dein feinstes Werkzeug: 20 kt weniger beim Hintermann schaffen über die Zeit viel Abstand.</P>
+      <P>Gib das ILS erst frei, wenn der Kurs passt. Wer zu steil auf den Localizer zufliegt, schießt durch.</P>
+    </>
+  );
+}
+
+function Controls() {
+  return (
+    <Table
+      head={['AKTION', 'SO GEHT ES']}
+      rows={[
+        ['Flieger wählen', 'Klick auf den Flieger, den Streifen oder eine Zeile im Funk-Log'],
+        ['Kontextmenü', 'Rechtsklick auf den Flieger (am Handy lange tippen)'],
+        ['Karte verschieben', 'Ziehen mit der Maus oder dem Finger'],
+        ['Zoomen', 'Mausrad oder RANGE'],
+        ['Landerichtung', 'ACTIVE RWY: Bahnen der Gegenrichtung schalten die Betriebsrichtung um'],
+        ['Zeitraffer', 'SESSION 1x bis 8x, Pause mit ⏸'],
+        ['Anzeige', 'Unten LABELS, ILS, NAVAID, STARs'],
+        ['Funk', 'RADIO zeigt das Funk-Log, VOICE schaltet die Stimmen. Ton gibt es erst nach dem ersten Klick ins Spiel.'],
+      ]}
+    />
+  );
+}
+
+function Credits() {
+  const link = (href: string, label: string) => <a href={href} target="_blank" rel="noreferrer" style={{ color: C.atc }}>{label}</a>;
+  return (
+    <>
+      <H>DATEN</H>
+      <P>Flughäfen, Bahnen und Funkfeuer: {link('https://ourairports.com/data/', 'OurAirports')} (gemeinfrei).</P>
+      <P>Anflugverfahren (STARs) und ILS: Navigraph AIRAC, nur zur privaten Nutzung freigeschaltet.</P>
+      <P>Funknamen der Airlines: {link('https://openflights.org/data.php', 'OpenFlights')}, Open Database License (ODbL).</P>
+      <H>STIMMEN</H>
+      <P>Sprachausgabe mit {link('https://github.com/OHF-Voice/piper1-gpl', 'Piper')} (GPL-3.0), als eigener Dienst auf dem Server.</P>
+      <P>Lotse: Stimme „joe“ (CC0). Piloten: Stimmen aus {link('https://www.openslr.org/141/', 'LibriTTS-R')} (Koizumi et al., CC BY 4.0) und dem {link('https://datashare.ed.ac.uk/handle/10283/3443', 'CSTR VCTK Corpus')} (University of Edinburgh, CC BY 4.0).</P>
+    </>
+  );
+}
+
+const CONTENT: Record<Tab, () => JSX.Element> = {
+  Überblick: Overview, Anflug: Approach, Befehle: Commands, Sprechfunk: Phraseology,
+  Staffelung: Separation, Bedienung: Controls, Quellen: Credits,
+};
+
+export function HowTo({ onClose }: { onClose: () => void }) {
+  const [tab, setTab] = useState<Tab>('Überblick');
+  const Content = CONTENT[tab];
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
+    >
+      <div
+        role="dialog"
+        aria-label="ATC HowTo"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          // Feste Höhe: die Reiter springen beim Wechsel nicht
+          width: 'min(780px, 100%)', height: 'min(860px, 100%)', display: 'flex', flexDirection: 'column',
+          background: '#070f0a', border: '1px solid #1a5530', borderRadius: 4,
+          fontFamily: FONT, fontSize: 12, lineHeight: '17px', color: C.text, boxShadow: '0 4px 30px rgba(0,0,0,0.9)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderBottom: `1px solid ${C.line}` }}>
+          <span style={{ color: C.head, fontWeight: 'bold', letterSpacing: 2 }}>ATC HOWTO</span>
+          <button onClick={onClose} title="Schließen (Esc)"
+            style={{ background: 'transparent', border: `1px solid ${C.line}`, color: C.dim, fontFamily: FONT, cursor: 'pointer', borderRadius: 2, padding: '1px 8px' }}>
+            ✕
+          </button>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, padding: '8px 12px 0' }}>
+          {TABS.map((t) => (
+            <button key={t} onClick={() => setTab(t)}
+              style={{
+                background: tab === t ? '#0a3020' : 'transparent',
+                border: `1px solid ${tab === t ? '#00cc66' : C.line}`,
+                color: tab === t ? C.head : C.dim,
+                fontFamily: FONT, fontSize: 11, padding: '3px 8px', cursor: 'pointer', borderRadius: 2,
+              }}>
+              {t.toUpperCase()}
+            </button>
+          ))}
+        </div>
+        <div style={{ overflowY: 'auto', padding: '4px 14px 14px' }}>
+          <Content />
+        </div>
+      </div>
+    </div>
+  );
+}
