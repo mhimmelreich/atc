@@ -71,9 +71,12 @@ function simplify(pts: Array<[number, number]>, tol: number): Array<[number, num
     const [a, b] = stack.pop()!;
     let maxD = 0, idx = -1;
     const [ay, ax] = pts[a], [by, bx] = pts[b];
-    const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1e-12;
+    const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy);
     for (let i = a + 1; i < b; i++) {
-      const d = Math.abs(dy * pts[i][1] - dx * pts[i][0] + bx * ay - by * ax) / len;
+      // Geschlossener Ring: Anfang = Ende, dann Abstand zum Punkt statt zur Linie
+      const d = len === 0
+        ? Math.hypot(pts[i][1] - ax, pts[i][0] - ay)
+        : Math.abs(dy * pts[i][1] - dx * pts[i][0] + bx * ay - by * ax) / len;
       if (d > maxD) { maxD = d; idx = i; }
     }
     if (maxD > tol && idx > 0) { keep[idx] = 1; stack.push([a, idx], [idx, b]); }
@@ -121,6 +124,12 @@ function ringsOf(rel: OsmElement): Town['rings'] {
     .filter((r) => r.length >= 4);
 }
 
+function distKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const r = Math.PI / 180;
+  const a = Math.sin(((lat2 - lat1) * r) / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lng2 - lng1) * r) / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(a));
+}
+
 /** Liegt der Punkt in einem der Ringe? (Strahlverfahren) */
 function inside(lat: number, lng: number, rings: Town['rings']): boolean {
   let hit = false;
@@ -144,7 +153,8 @@ async function fetchTowns(lat: number, lon: number): Promise<Town[]> {
   const dLat = RADIUS_M / 111_000, dLon = dLat / Math.cos((lat * Math.PI) / 180);
   const bbox = `${(lat - dLat).toFixed(3)},${(lon - dLon).toFixed(3)},${(lat + dLat).toFixed(3)},${(lon + dLon).toFixed(3)}`;
   const nodes = await overpass(`[out:json][timeout:110];node(${bbox})[place~"^(city|town|village)$"][name][population](if:number(t["population"])>=${TOWN_MIN_POP});out tags qt;`);
-  const towns = nodes.map((n) => ({ name: n.tags!.name, pop: popOf(n.tags), lat: n.lat!, lng: n.lon! })).filter((t) => t.pop >= TOWN_MIN_POP);
+  const towns = nodes.map((n) => ({ name: n.tags!.name, pop: popOf(n.tags), lat: n.lat!, lng: n.lon! }))
+    .filter((t) => t.pop >= TOWN_MIN_POP && distKm(lat, lon, t.lat, t.lng) <= RADIUS_M / 1000);
   // Erst nur die Namen der Grenzen im Rechteck (schnell), dann die passenden mit Geometrie per Kennung
   const names = new Set(towns.map((t) => t.name));
   const index = await overpass(`[out:json][timeout:110];rel(${bbox})[boundary=administrative][admin_level~"^(6|8)$"];out tags qt;`);
