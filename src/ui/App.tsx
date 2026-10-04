@@ -97,6 +97,11 @@ export function App() {
 
   // ── Funk: Log und Sprachausgabe ──────────────────────────────────────────
   const [radioPrefs, setRadioPrefs] = useState<RadioPrefs>(loadRadioPrefs);
+  const [view3D, setView3D] = useState(() => { try { return localStorage.getItem('atc-view3d') === '1'; } catch { return false; } });
+  const toggleView3D = () => setView3D((v) => {
+    try { localStorage.setItem('atc-view3d', v ? '0' : '1'); } catch { /* ohne Speicher eben nicht gemerkt */ }
+    return !v;
+  });
   const [voice] = useState(() => new RadioVoice());
   const lastRadioIdRef = useRef(0);
   const changeRadioPrefs = useCallback((patch: Partial<RadioPrefs>) => {
@@ -518,6 +523,7 @@ export function App() {
             selectedId={gameState.selectedId}
             onSelectAircraft={handleSelectAircraft}
             onContextMenu={handleContextMenu}
+            view3D={view3D}
           />
           {radioPrefs.log && (
             <RadioLog
@@ -531,6 +537,7 @@ export function App() {
             display={gameState.display}
             onChange={(patch) => engineRef.current?.setDisplay(patch)}
             extra={[
+              { label: '3D', title: '3D-Ansicht: Ziehen verschiebt, rechte Maustaste/Shift oder zwei Finger drehen und neigen, Rad/Pinch zoomt', active: view3D, onClick: toggleView3D },
               { label: 'RADIO', title: 'Funk-Log', active: radioPrefs.log, onClick: () => changeRadioPrefs({ log: !radioPrefs.log }) },
               { label: 'VOICE', title: 'Funk hörbar', active: radioPrefs.voice, onClick: () => changeRadioPrefs({ voice: !radioPrefs.voice }) },
             ]}

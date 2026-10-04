@@ -7,7 +7,8 @@ import type { RadioMessage } from '@/types/radio';
 import type { Weather } from '@/types/weather';
 import { AircraftManager } from './AircraftManager';
 import { inbound, callsIn, liveToAircraft, liveId, hexOf, landingRunway, type Inbound, type TakeoverContext } from './LiveTraffic';
-import { RadarRenderer, DEFAULT_DISPLAY, type DisplayOptions } from './RadarRenderer';
+import { RadarRenderer, DEFAULT_DISPLAY, type DisplayOptions, type RenderOptions } from './RadarRenderer';
+import { Scene3DRenderer, DEFAULT_CAMERA, PITCH_MIN, PITCH_MAX, type Camera3D } from './Scene3DRenderer';
 import { headingDiff } from '@/utils/aviation';
 import { pad3 } from './Speech';
 import { destinationPoint, distanceNM } from '@/utils/geo';
@@ -85,6 +86,10 @@ export interface SessionData {
 export class GameEngine {
   private manager: AircraftManager;
   private renderer: RadarRenderer | null = null;
+  private scene3d: Scene3DRenderer | null = null;
+  /** 3D-Ansicht statt Radar; Kamera dreht und neigt sich um den Blickpunkt */
+  view3D = false;
+  camera: Camera3D = { ...DEFAULT_CAMERA };
   airport: Airport | null = null;        // public for hit-test in RadarCanvas
   viewLat = 0;                           // public: view centre (pan target)
   viewLng = 0;
@@ -159,10 +164,12 @@ export class GameEngine {
 
   attachCanvas(canvas: HTMLCanvasElement): void {
     this.renderer = new RadarRenderer(canvas);
+    this.scene3d = new Scene3DRenderer(canvas);
   }
 
   resizeCanvas(w: number, h: number): void {
     this.renderer?.resize(w, h);
+    this.scene3d?.resize(w, h);
   }
 
   setAirport(airport: Airport, waypoints: Waypoint[], stars: STAR[] = []): void {
@@ -275,10 +282,10 @@ export class GameEngine {
   }
 
   /** Übernehmbare echte Anflüge an ihrer aktuellen Position (für Klicks aufs Radar) */
-  liveTargets(): Array<{ id: string; lat: number; lng: number }> {
+  liveTargets(): Array<{ id: string; lat: number; lng: number; altitudeFt: number }> {
     return this.liveFrame
       .filter((ac) => this.liveInbound.has(ac.hex))
-      .map((ac) => ({ id: liveId(ac.hex), lat: ac.lat, lng: ac.lng }));
+      .map((ac) => ({ id: liveId(ac.hex), lat: ac.lat, lng: ac.lng, altitudeFt: ac.altFt ?? 0 }));
   }
 
   /** Anflüge fürs Radarbild: Startplatz, geschätzt, schon gemeldet */
@@ -336,7 +343,7 @@ export class GameEngine {
       this.onStateChange(this.state);
 
       if (this.renderer && this.airport) {
-        this.renderer.render({
+        const opts: RenderOptions = {
           now: ts,
           airport: this.airport,
           aircraft,
@@ -354,7 +361,9 @@ export class GameEngine {
           display: this.state.display,
           activeRunwayIds: this.state.activeRunwayIds,
           live: this.state.trafficMode === 'live' ? { aircraft: live, trails: this.liveTrails, inbound: this.inboundView() } : undefined,
-        });
+        };
+        if (this.view3D && this.scene3d) this.scene3d.render(opts, this.camera);
+        else this.renderer.render(opts);
       }
 
       this.rafId = requestAnimationFrame(loop);
@@ -388,6 +397,36 @@ export class GameEngine {
     this.viewLat += dyNM / 60;
     this.viewLng -= dxNM / (60 * cosLat);
   }
+
+  setView3D(on: boolean): void { this.view3D = on; }
+
+  /** Kamera drehen (Grad nach rechts) und neigen (Grad nach oben) */
+  orbit3D(dYaw: number, dPitch: number): void {
+    const yaw = (((this.camera.yaw + dYaw) % 360) + 360) % 360;
+    const pitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, this.camera.pitch + dPitch));
+    this.camera = { yaw, pitch };
+  }
+
+  /** Blickpunkt in der 3D-Ansicht verschieben: Bildschirmpixel, relativ zur Blickrichtung */
+  pan3D(dxPx: number, dyPx: number): void {
+    if (!this.scene3d) return;
+    const nm = this.scene3d.nmPerPx(this.state.rangeNM);
+    const yaw = (this.camera.yaw * Math.PI) / 180;
+    // Ziehen nach rechts schiebt die Szene mit, der Blickpunkt wandert nach links; nach unten → nach vorn
+    const sinP = Math.max(0.3, Math.sin((this.camera.pitch * Math.PI) / 180));
+    const right = -dxPx * nm;
+    const fwd = (dyPx * nm) / sinP;
+    const east = right * Math.cos(yaw) + fwd * Math.sin(yaw);
+    const north = -right * Math.sin(yaw) + fwd * Math.cos(yaw);
+    this.pan(-east, north);
+  }
+
+  /** Bildposition eines Punkts in der 3D-Ansicht (CSS px), null hinter der Kamera */
+  project3D(lat: number, lng: number, altFt: number): { x: number; y: number } | null {
+    return this.scene3d?.project(lat, lng, altFt) ?? null;
+  }
+
+  resetCamera(): void { this.camera = { ...DEFAULT_CAMERA }; }
 
   resetView(): void {
     if (this.airport) {
