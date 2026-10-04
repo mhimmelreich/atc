@@ -147,33 +147,67 @@ function inside(lat: number, lng: number, rings: Town['rings']): boolean {
 
 
 /**
- * Ortschaften mit Einwohnerzahl (die steht zuverlässig am Ortsknoten, place=city/town/village) und als Umriss
- * die gleichnamige Gemeindegrenze, in der der Knoten liegt: Gemeinde (admin_level 8), bei kreisfreien Städten
- * die Stadt auf Ebene 6. Ohne passende Grenze bleibt es beim Namen.
+ * Ortschaften als Gemeindegrenzen (admin_level 8, bei kreisfreien Städten die Stadt auf Ebene 6) mit Name und
+ * Einwohnerzahl. Die Einwohnerzahl steht mal an der Grenze, mal am Ortsknoten (place=city/town/village), daher
+ * beides. Beschriftet wird am gleichnamigen Ortsknoten innerhalb der Grenze, sonst in der Mitte.
+ * Orte mit Einwohnerzahl, aber ohne Grenze in OSM, bekommen nur den Namen.
  */
 async function fetchTowns(lat: number, lon: number): Promise<Town[]> {
   // Rechteck statt Umkreis: für Overpass deutlich schneller, vor allem bei Grenz-Relationen
   const dLat = RADIUS_M / 111_000, dLon = dLat / Math.cos((lat * Math.PI) / 180);
   const bbox = `${(lat - dLat).toFixed(3)},${(lon - dLon).toFixed(3)},${(lat + dLat).toFixed(3)},${(lon + dLon).toFixed(3)}`;
-  const nodes = await overpass(`[out:json][timeout:110];node(${bbox})[place~"^(city|town|village)$"][name][population](if:number(t["population"])>=${TOWN_MIN_POP});out tags qt;`);
-  const towns = nodes.map((n) => ({ name: n.tags!.name, pop: popOf(n.tags), lat: n.lat!, lng: n.lon! }))
-    .filter((t) => t.pop >= TOWN_MIN_POP && distKm(lat, lon, t.lat, t.lng) <= RADIUS_M / 1000);
-  // Erst nur die Namen der Grenzen im Rechteck (schnell), dann die passenden mit Geometrie per Kennung
-  const names = new Set(towns.map((t) => t.name));
-  const index = await overpass(`[out:json][timeout:110];rel(${bbox})[boundary=administrative][admin_level~"^(6|8)$"];out tags qt;`);
-  const ids = index.filter((r) => names.has(r.tags?.name ?? '')).map((r) => r.id);
-  const rels: OsmElement[] = [];
+  const index = await overpass(`[out:json][timeout:110];rel(${bbox})[boundary=administrative][admin_level~"^(6|8)$"][name];out tags qt;`);
+  const nodes = await overpass(`[out:json][timeout:110];node(${bbox})[place~"^(city|town|village)$"][name];out tags qt;`);
+  if (index.length === 0 && nodes.length === 0) throw new Error('Overpass lieferte nichts');
+
+  const nodesByName = new Map<string, OsmElement[]>();
+  for (const n of nodes) nodesByName.set(n.tags!.name, [...(nodesByName.get(n.tags!.name) ?? []), n]);
+  const nodePop = (name: string) => Math.max(0, ...(nodesByName.get(name) ?? []).map((n) => popOf(n.tags) || 0));
+
+  // Gemeinden und kreisfreie Städte (nicht die Landkreise) mit genug Einwohnern
+  const candidates = index
+    .filter((r) => {
+      const t = r.tags!;
+      return t.admin_level === '8' || (t['de:place'] !== 'county' && t.border_type !== 'county' && !/kreis/i.test(t.name));
+    })
+    .map((r) => ({ id: r.id, name: r.tags!.name, level: Number(r.tags!.admin_level), pop: popOf(r.tags) || nodePop(r.tags!.name) }))
+    .filter((c) => c.pop >= TOWN_MIN_POP);
+  // Kreisfreie Stadt auf Ebene 6 und gleichnamige Gemeinde auf 8 gibt es selten doppelt: Ebene 8 gewinnt
+  const byName = new Map<string, (typeof candidates)[number]>();
+  for (const c of candidates) { const o = byName.get(c.name); if (!o || c.level > o.level) byName.set(c.name, c); }
+  const chosen = [...byName.values()];
+
+  const geoms = new Map<number, Town['rings']>();
+  const ids = chosen.map((c) => c.id);
   for (let i = 0; i < ids.length; i += 100) {
-    rels.push(...await overpass(`[out:json][timeout:110];rel(id:${ids.slice(i, i + 100).join(',')});out geom qt;`));
+    const rels = await overpass(`[out:json][timeout:110];rel(id:${ids.slice(i, i + 100).join(',')});out geom qt;`);
+    for (const r of rels) geoms.set(r.id, ringsOf(r));
   }
-  const bounds = rels
-    .filter((r) => r.tags?.admin_level === '8' || (r.tags?.['de:place'] !== 'county' && !/kreis/i.test(r.tags?.name ?? '')))
-    .map((r) => ({ name: r.tags!.name, level: r.tags!.admin_level, rings: ringsOf(r) }))
-    .filter((b) => b.rings.length > 0);
-  return towns.map((t) => {
-    const own = bounds.filter((b) => b.name === t.name && inside(t.lat, t.lng, b.rings)).sort((a, b) => Number(b.level) - Number(a.level))[0];
-    return { ...t, lat: Math.round(t.lat * 1e4) / 1e4, lng: Math.round(t.lng * 1e4) / 1e4, rings: own?.rings ?? [] };
-  });
+
+  const towns: Town[] = [];
+  for (const c of chosen) {
+    const rings = geoms.get(c.id) ?? [];
+    if (rings.length === 0) continue;
+    const node = (nodesByName.get(c.name) ?? []).find((n) => inside(n.lat!, n.lon!, rings));
+    let tLat: number, tLng: number;
+    if (node) { tLat = node.lat!; tLng = node.lon!; } else {
+      const big = rings.reduce((a, b) => (b.length > a.length ? b : a));
+      tLat = big.reduce((s, p) => s + p[0], 0) / big.length;
+      tLng = big.reduce((s, p) => s + p[1], 0) / big.length;
+    }
+    if (distKm(lat, lon, tLat, tLng) > RADIUS_M / 1000) continue;
+    towns.push({ name: c.name, pop: c.pop, lat: Math.round(tLat * 1e4) / 1e4, lng: Math.round(tLng * 1e4) / 1e4, rings });
+  }
+  // Orte mit Einwohnerzahl ohne passende Grenze: nur der Name
+  const named = new Set(towns.map((t) => t.name));
+  for (const n of nodes) {
+    const pop = popOf(n.tags);
+    if (pop >= TOWN_MIN_POP && !named.has(n.tags!.name) && distKm(lat, lon, n.lat!, n.lon!) <= RADIUS_M / 1000) {
+      named.add(n.tags!.name);
+      towns.push({ name: n.tags!.name, pop, lat: Math.round(n.lat! * 1e4) / 1e4, lng: Math.round(n.lon! * 1e4) / 1e4, rings: [] });
+    }
+  }
+  return towns;
 }
 
 router.get('/', async (req, res) => {
