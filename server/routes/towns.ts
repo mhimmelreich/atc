@@ -7,7 +7,8 @@ import { join } from 'node:path';
 const router = Router();
 
 const DATA_DIR = process.env.TOWNS_DIR ?? 'data/towns';
-const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const OVERPASS = 'https://overpass-api.de/api/interpreter';
+const OVERPASS_TRIES = 4;
 const USER_AGENT = 'atc-game (games.himmelreich.cloud)';
 const RADIUS_M = 110_000;
 const TOWN_MIN_POP = 5000;
@@ -94,10 +95,12 @@ interface OsmElement {
 }
 
 async function overpass(query: string): Promise<OsmElement[]> {
+  // Overpass ist oft ausgelastet (429/504): mit wachsender Pause erneut versuchen
   let lastErr: Error | null = null;
-  for (const url of OVERPASS) {
+  for (let attempt = 0; attempt < OVERPASS_TRIES; attempt++) {
+    if (attempt > 0) await new Promise((ok) => setTimeout(ok, 15_000 * attempt));
     try {
-      const res = await fetch(url, {
+      const res = await fetch(OVERPASS, {
         method: 'POST',
         headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `data=${encodeURIComponent(query)}`,
@@ -179,8 +182,8 @@ async function fetchTowns(lat: number, lon: number): Promise<Town[]> {
 
   const geoms = new Map<number, Town['rings']>();
   const ids = chosen.map((c) => c.id);
-  for (let i = 0; i < ids.length; i += 100) {
-    const rels = await overpass(`[out:json][timeout:110];rel(id:${ids.slice(i, i + 100).join(',')});out geom qt;`);
+  for (let i = 0; i < ids.length; i += 40) {
+    const rels = await overpass(`[out:json][timeout:110];rel(id:${ids.slice(i, i + 40).join(',')});out geom qt;`);
     for (const r of rels) geoms.set(r.id, ringsOf(r));
   }
 
