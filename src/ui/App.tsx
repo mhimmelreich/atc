@@ -81,9 +81,11 @@ export function App() {
     pendingCmdTypes: {}, display: { ...DEFAULT_DISPLAY },
     activeRunwayIds: [], radio: [],
     trafficMode: 'sim', live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {},
-    weather: null, runwaySource: 'default', watch: [], watchRoles: {},
+    weather: null, runwaySource: 'default', watch: [], watchRoles: {}, spectator: null,
   });
   const watching = gameState.trafficMode === 'watch';
+  // WATCH: Standort per GPS (Browser) – der nächste Verkehrsflughafen wird der gewählte Platz
+  const [gpsStatus, setGpsStatus] = useState<string | null>(null);
   const [airport, setAirport] = useState<Airport | null>(null);
   const [navPoints, setNavPoints] = useState<Waypoint[]>([]);
   const [stars, setStars] = useState<STAR[]>([]);
@@ -192,16 +194,52 @@ export function App() {
     return () => { cancelled = true; };
   }, [selectedIcao, sourcePref, voice]);
 
-  // ── Echter Verkehr: alle 5 s abfragen, solange LIVE aktiv und der Tab sichtbar ist ──
+  /** Platz per ICAO wählen; im Zuschauer-Modus ist das dann auch der Standort (GPS aus) */
+  const chooseIcao = useCallback((icao: string) => {
+    if (icao !== selectedIcaoRef.current) {
+      engineRef.current?.setSpectator(null);
+      setGpsStatus(null);
+    }
+    setSelectedIcao(icao);
+  }, []);
+
+  const locateByGps = useCallback(() => {
+    if (!navigator.geolocation) { setGpsStatus('GPS nicht verfügbar'); return; }
+    setGpsStatus('Standort wird gesucht…');
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+        engineRef.current?.setSpectator({ lat, lng, accuracyM: accuracy });
+        try {
+          const res = await fetch(`${import.meta.env.BASE_URL}api/opendata/nearest?lat=${lat.toFixed(3)}&lon=${lng.toFixed(3)}`);
+          if (!res.ok) throw new Error();
+          const near = await res.json() as { icao: string; distNM: number };
+          setGpsStatus(`GPS ±${Math.round(accuracy)} m · nächster Platz ${near.icao} ${Math.round(near.distNM)} NM`);
+          setIcaoInput(near.icao);
+          setIcaoError(null);
+          setSelectedIcao(near.icao);
+        } catch {
+          setGpsStatus(`GPS ±${Math.round(accuracy)} m · kein Flughafen gefunden`);
+        }
+      },
+      (err) => setGpsStatus(err.code === err.PERMISSION_DENIED ? 'GPS nicht erlaubt' : 'Standort nicht gefunden'),
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 60_000 },
+    );
+  }, []);
+
+  // ── Echter Verkehr: alle 5 s abfragen, solange LIVE/WATCH aktiv und der Tab sichtbar ist ──
+  // WATCH mit GPS: Verkehr rund um den Zuschauer
+  const spectator = watching ? gameState.spectator : null;
   useEffect(() => {
     if (gameState.trafficMode === 'sim' || !airport) return;
+    const center = spectator ?? airport;
     let stopped = false;
     let busy = false;
     const poll = async () => {
       if (busy || document.hidden) return;
       busy = true;
       try {
-        const list = await fetchLiveTraffic(airport.lat, airport.lng);
+        const list = await fetchLiveTraffic(center.lat, center.lng);
         if (!stopped) engineRef.current?.setLiveTraffic(list);
       } catch {
         if (!stopped) engineRef.current?.setLiveError();
@@ -212,7 +250,7 @@ export function App() {
     void poll();
     const id = setInterval(poll, LIVE_POLL_MS);
     return () => { stopped = true; clearInterval(id); };
-  }, [gameState.trafficMode, airport]);
+  }, [gameState.trafficMode, airport, spectator]);
 
   // ── Wetter: METAR beim Laden des Platzes, dann alle 10 Minuten ──
   useEffect(() => {
@@ -285,10 +323,10 @@ export function App() {
             const v = e.target.value.toUpperCase();
             setIcaoInput(v);
             setIcaoError(null);
-            if (AVAILABLE_AIRPORTS.includes(v)) setSelectedIcao(v);
+            if (AVAILABLE_AIRPORTS.includes(v)) chooseIcao(v);
           }}
-          onKeyDown={(e) => { if (e.key === 'Enter' && /^[A-Z0-9]{4}$/.test(icaoInput)) setSelectedIcao(icaoInput); }}
-          onBlur={() => { if (/^[A-Z0-9]{4}$/.test(icaoInput)) setSelectedIcao(icaoInput); else setIcaoInput(selectedIcao); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && /^[A-Z0-9]{4}$/.test(icaoInput)) chooseIcao(icaoInput); }}
+          onBlur={() => { if (/^[A-Z0-9]{4}$/.test(icaoInput)) chooseIcao(icaoInput); else setIcaoInput(selectedIcao); }}
           style={{ background: '#0a1a0a', border: '1px solid #1a4428', color: '#00ff88', fontFamily: '"Courier New", monospace', fontSize: 12, padding: '3px 6px', flex: 1, minWidth: 0, outline: 'none', textTransform: 'uppercase' }}
         />
         <datalist id="atc-airports">
@@ -367,6 +405,29 @@ export function App() {
           ))}
         </div>
       </div>
+
+      {/* WATCH: Standort des Zuschauers – am Platz (ICAO) oder per GPS */}
+      {watching && (
+        <div>
+          <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4 }}>SPECTATOR</div>
+          <div style={{ display: 'flex', gap: 3 }}>
+            {[
+              { label: `ICAO ${selectedIcao}`, title: 'Standort am gewählten Platz (ICAO oben eingeben)', active: !gameState.spectator,
+                onClick: () => { engineRef.current?.setSpectator(null); setGpsStatus(null); } },
+              { label: 'GPS', title: 'Standort per GPS des Geräts; der nächste Verkehrsflughafen wird gewählt', active: !!gameState.spectator, onClick: locateByGps },
+            ].map((o) => (
+              <button key={o.label} title={o.title} onClick={o.onClick} style={{
+                flex: 1,
+                background: o.active ? '#0a3020' : 'transparent',
+                border: `1px solid ${o.active ? '#00cc66' : '#1a4428'}`,
+                color: o.active ? '#00ff88' : '#446644',
+                fontFamily: '"Courier New", monospace', fontSize: 11, padding: '4px 2px', cursor: 'pointer', borderRadius: 2,
+              }}>{o.label}</button>
+            ))}
+          </div>
+          {gpsStatus && <div style={{ color: gpsStatus.startsWith('GPS ±') ? '#7fa88c' : '#ffaa00', fontSize: 10, marginTop: 3 }}>{gpsStatus}</div>}
+        </div>
+      )}
 
       {/* Active landing runway */}
       {airport && (() => {
@@ -474,7 +535,7 @@ export function App() {
 
       {watching ? (
         <WatchPanel
-          aircraft={gameState.watch} roles={gameState.watchRoles} airport={airport}
+          aircraft={gameState.watch} roles={gameState.watchRoles} airport={airport} spectator={gameState.spectator}
           selectedId={gameState.selectedId} onSelect={handleSelectAircraft}
         />
       ) : (<>

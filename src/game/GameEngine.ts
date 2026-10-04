@@ -65,7 +65,11 @@ export interface GameState {
   watch: LiveAircraft[];
   /** WATCH: Anflüge und Abflüge des gewählten Platzes, nach hex */
   watchRoles: Record<string, LiveInbound>;
+  /** WATCH: Standort des Zuschauers per GPS (null: am gewählten Platz) */
+  spectator: Spectator | null;
 }
+
+export interface Spectator { lat: number; lng: number; accuracyM: number }
 
 export { type DisplayOptions };
 
@@ -125,6 +129,7 @@ export class GameEngine {
     runwaySource: 'default',
     watch: [],
     watchRoles: {},
+    spectator: null,
   };
   get rangeNM(): number { return this.state.rangeNM; }
   private onStateChange: StateCallback;
@@ -195,8 +200,10 @@ export class GameEngine {
     this.airport = airport;
     this.waypoints = waypoints;
     this.stars = stars;
-    this.viewLat = airport.lat;
-    this.viewLng = airport.lng;
+    // WATCH mit GPS: Blick auf den Zuschauer statt auf den Platz
+    const center = this.watching && this.state.spectator ? this.state.spectator : airport;
+    this.viewLat = center.lat;
+    this.viewLng = center.lng;
     this.manager.setAirport(airport, stars);
     // Standard: alle ILS-Landebahnen der Vorzugsrichtung
     const ilsRunways = airport.runways.filter((r) => r.ils && r.role !== 'departure');
@@ -217,7 +224,7 @@ export class GameEngine {
    */
   setTrafficMode(mode: TrafficMode): void {
     if (mode === this.state.trafficMode) return;
-    this.state = { ...this.state, trafficMode: mode, selectedId: null, timeScale: mode !== 'sim' ? 1 : this.state.timeScale, paused: false };
+    this.state = { ...this.state, trafficMode: mode, selectedId: null, spectator: mode === 'watch' ? this.state.spectator : null, timeScale: mode !== 'sim' ? 1 : this.state.timeScale, paused: false };
     this.manager.setSpawning(mode === 'sim');
     this.manager.clearTraffic();
     this.manager.setAnnouncements([]);
@@ -407,6 +414,7 @@ export class GameEngine {
           display: this.state.display,
           activeRunwayIds: this.state.activeRunwayIds,
           live: this.liveMode ? { aircraft: live, trails: this.liveTrails, inbound: roles } : undefined,
+          spectator: this.watching ? this.state.spectator : null,
         };
         if (this.view3D && this.scene3d) this.scene3d.render(opts, this.camera);
         else this.renderer.render(opts);
@@ -474,10 +482,18 @@ export class GameEngine {
 
   resetCamera(): void { this.camera = { ...DEFAULT_CAMERA }; }
 
+  /** WATCH: Standort des Zuschauers (GPS) setzen oder löschen (dann gilt der gewählte Platz) */
+  setSpectator(pos: Spectator | null): void {
+    this.state = { ...this.state, spectator: pos };
+    const center = pos ?? this.airport;
+    if (center) { this.viewLat = center.lat; this.viewLng = center.lng; }
+  }
+
   resetView(): void {
-    if (this.airport) {
-      this.viewLat = this.airport.lat;
-      this.viewLng = this.airport.lng;
+    const center = (this.watching && this.state.spectator) || this.airport;
+    if (center) {
+      this.viewLat = center.lat;
+      this.viewLng = center.lng;
     }
     this.setRange(80);
   }

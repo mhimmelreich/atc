@@ -2,7 +2,7 @@
 import type { Aircraft } from '@/types/aircraft';
 import type { Runway } from '@/types/airport';
 import type { STAR, Waypoint } from '@/types/navdata';
-import type { RenderOptions } from './RadarRenderer';
+import { drawSpectator, type RenderOptions } from './RadarRenderer';
 import { destinationPoint, toRad } from '@/utils/geo';
 import { typeData } from './constants';
 import { aircraftSilhouette } from './aircraftSymbol';
@@ -191,6 +191,10 @@ export class Scene3DRenderer {
 
     this.sampleTrails(o);
     this.drawConflicts(o);
+    if (o.spectator) {
+      const p = this.proj(this.world(o.spectator.lat, o.spectator.lng, 0));
+      if (p) drawSpectator(this.ctx, p);
+    }
     this.drawTargets(o);
     this.drawHud(o, cam);
     ctx.restore();

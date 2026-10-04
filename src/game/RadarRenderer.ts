@@ -97,6 +97,8 @@ export interface RenderOptions {
   activeRunwayIds: string[];
   /** Echte Flieger (LIVE), nicht gelotst; inbound: Anflüge zum Platz, die man übernehmen kann (hex → Info) */
   live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]>; inbound: Map<string, LiveInbound> };
+  /** WATCH: Standort des Zuschauers (GPS) */
+  spectator?: { lat: number; lng: number } | null;
 }
 
 export class RadarRenderer {
@@ -204,6 +206,7 @@ export class RadarRenderer {
       if (previewAc) this.drawAltitudeReachCircle(previewAc, opts.previewAltitude.targetAlt, ll2c);
     }
 
+    if (opts.spectator) drawSpectator(ctx, ll2c(opts.spectator.lat, opts.spectator.lng));
     if (opts.live) this.drawLive(opts.live, ll2c, W, H, opts.trailLength, opts.display.labels, opts.now, opts.selectedId);
 
     for (const ac of opts.aircraft) this.drawTrail(ac, ll2c, opts.trailLength);
@@ -959,4 +962,23 @@ export class RadarRenderer {
       ctx.stroke();
     }
   }
+}
+
+/** Standort des Zuschauers: Fadenkreuz mit "YOU" */
+export function drawSpectator(ctx: CanvasRenderingContext2D, p: { x: number; y: number }): void {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,120,220,0.95)';
+  ctx.fillStyle = 'rgba(255,120,220,0.95)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+  ctx.moveTo(p.x - 11, p.y); ctx.lineTo(p.x - 3, p.y);
+  ctx.moveTo(p.x + 3, p.y); ctx.lineTo(p.x + 11, p.y);
+  ctx.moveTo(p.x, p.y - 11); ctx.lineTo(p.x, p.y - 3);
+  ctx.moveTo(p.x, p.y + 3); ctx.lineTo(p.x, p.y + 11);
+  ctx.stroke();
+  ctx.font = 'bold 10px "Courier New"';
+  ctx.textAlign = 'left';
+  ctx.fillText('YOU', p.x + 9, p.y + 14);
+  ctx.restore();
 }

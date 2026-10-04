@@ -8,6 +8,8 @@ interface Props {
   aircraft: LiveAircraft[];
   roles: Record<string, LiveInbound>;
   airport: Airport | null;
+  /** Standort per GPS; ohne ihn gilt der Platz */
+  spectator: { lat: number; lng: number } | null;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }
@@ -20,15 +22,17 @@ const roleText = (r?: LiveInbound) => (r?.out ? `→ ${r.dest ?? '?'}` : r ? `${
 const fl = (ft: number | null) => (ft === null ? '---' : ft < 6000 ? `${Math.round(ft / 100) * 100} ft` : `FL${Math.round(ft / 100).toString().padStart(3, '0')}`);
 const vsArrow = (vs: number | null) => ((vs ?? 0) > 300 ? '↑' : (vs ?? 0) < -300 ? '↓' : '→');
 
-export function WatchPanel({ aircraft, roles, airport, selectedId, onSelect }: Props) {
-  const dist = (ac: LiveAircraft) => (airport ? distanceNM(airport.lat, airport.lng, ac.lat, ac.lng) : 0);
+export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, onSelect }: Props) {
+  // Entfernung vom Zuschauer: GPS-Standort oder der Platz
+  const center = spectator ?? airport;
+  const dist = (ac: LiveAircraft) => (center ? distanceNM(center.lat, center.lng, ac.lat, ac.lng) : 0);
   const list = [...aircraft].sort((a, b) => dist(a) - dist(b)).slice(0, MAX_LIST);
   const sel = aircraft.find((ac) => `live-${ac.hex}` === selectedId);
 
   return (
     <>
       <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1 }}>SELECTED</div>
-      {sel ? <Details ac={sel} role={roles[sel.hex]} airport={airport} /> : (
+      {sel ? <Details ac={sel} role={roles[sel.hex]} airport={airport} spectator={spectator} /> : (
         <div style={{ color: '#446644', fontSize: 11, padding: '4px 0' }}>Flieger auf dem Radar oder in der Liste anklicken</div>
       )}
 
@@ -66,9 +70,10 @@ export function WatchPanel({ aircraft, roles, airport, selectedId, onSelect }: P
   );
 }
 
-function Details({ ac, role, airport }: { ac: LiveAircraft; role?: LiveInbound; airport: Airport | null }) {
-  const d = airport ? distanceNM(airport.lat, airport.lng, ac.lat, ac.lng) : null;
-  const brg = airport ? Math.round(bearingBetween(airport.lat, airport.lng, ac.lat, ac.lng)) : null;
+function Details({ ac, role, airport, spectator }: { ac: LiveAircraft; role?: LiveInbound; airport: Airport | null; spectator: { lat: number; lng: number } | null }) {
+  const center = spectator ?? airport;
+  const d = center ? distanceNM(center.lat, center.lng, ac.lat, ac.lng) : null;
+  const brg = center ? Math.round(bearingBetween(center.lat, center.lng, ac.lat, ac.lng)) : null;
   const age = Math.max(0, Math.round((Date.now() - ac.ts) / 1000));
   const rows: Array<[string, string]> = [
     ['TYPE', [ac.type, ac.reg].filter(Boolean).join(' · ') || '—'],
@@ -78,7 +83,7 @@ function Details({ ac, role, airport }: { ac: LiveAircraft; role?: LiveInbound; 
     ['GS', ac.gs === null ? '—' : `${Math.round(ac.gs)} kt`],
     ['TRACK', ac.track === null ? '—' : `${Math.round(ac.track).toString().padStart(3, '0')}°`],
     ['SQUAWK', ac.squawk ?? '—'],
-    ['POS', d === null ? '—' : `${Math.round(d)} NM, ${brg!.toString().padStart(3, '0')}° von ${airport!.icao}`],
+    ['POS', d === null ? '—' : `${d < 10 ? d.toFixed(1) : Math.round(d)} NM, ${brg!.toString().padStart(3, '0')}° von ${spectator ? 'dir' : airport!.icao}`],
     ['DATA', `${age} s alt`],
   ];
   return (
