@@ -133,7 +133,6 @@ function inside(lat: number, lng: number, rings: Town['rings']): boolean {
   return hit;
 }
 
-const escapeRe = (s: string) => s.replace(/[\\^$.*+?()[\]{}|"]/g, (c) => (c === '"' ? '\\"' : `\\\\${c}`));
 
 /**
  * Ortschaften mit Einwohnerzahl (die steht zuverlässig am Ortsknoten, place=city/town/village) und als Umriss
@@ -146,11 +145,13 @@ async function fetchTowns(lat: number, lon: number): Promise<Town[]> {
   const bbox = `${(lat - dLat).toFixed(3)},${(lon - dLon).toFixed(3)},${(lat + dLat).toFixed(3)},${(lon + dLon).toFixed(3)}`;
   const nodes = await overpass(`[out:json][timeout:110];node(${bbox})[place~"^(city|town|village)$"][name][population](if:number(t["population"])>=${TOWN_MIN_POP});out tags qt;`);
   const towns = nodes.map((n) => ({ name: n.tags!.name, pop: popOf(n.tags), lat: n.lat!, lng: n.lon! })).filter((t) => t.pop >= TOWN_MIN_POP);
-  const names = [...new Set(towns.map((t) => t.name))];
+  // Erst nur die Namen der Grenzen im Rechteck (schnell), dann die passenden mit Geometrie per Kennung
+  const names = new Set(towns.map((t) => t.name));
+  const index = await overpass(`[out:json][timeout:110];rel(${bbox})[boundary=administrative][admin_level~"^(6|8)$"];out tags qt;`);
+  const ids = index.filter((r) => names.has(r.tags?.name ?? '')).map((r) => r.id);
   const rels: OsmElement[] = [];
-  for (let i = 0; i < names.length; i += 150) {
-    const re = names.slice(i, i + 150).map(escapeRe).join('|');
-    rels.push(...await overpass(`[out:json][timeout:110];rel(${bbox})[boundary=administrative][admin_level~"^(6|8)$"][name~"^(${re})$"];out geom qt;`));
+  for (let i = 0; i < ids.length; i += 100) {
+    rels.push(...await overpass(`[out:json][timeout:110];rel(id:${ids.slice(i, i + 100).join(',')});out geom qt;`));
   }
   const bounds = rels
     .filter((r) => r.tags?.admin_level === '8' || (r.tags?.['de:place'] !== 'county' && !/kreis/i.test(r.tags?.name ?? '')))
