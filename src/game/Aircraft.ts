@@ -5,7 +5,7 @@ import type { Runway } from '@/types/airport';
 import type { STAR } from '@/types/navdata';
 import { turnToHeading, adjustAltitude, adjustSpeed, ktsToNMps, headingDiff, glideslopeAltitude, normaliseHdg } from '@/utils/aviation';
 import { destinationPoint, distanceNM, bearingBetween } from '@/utils/geo';
-import { TRAIL_LENGTH, TRAIL_INTERVAL_MS, AIRCRAFT_TYPES } from './constants';
+import { TRAIL_LENGTH, TRAIL_INTERVAL_MS, typeData } from './constants';
 
 export function createAircraft(partial: Omit<Aircraft, 'trail' | 'conflict' | 'warning'>): Aircraft {
   return { ...partial, trail: [], conflict: false, warning: false };
@@ -76,7 +76,7 @@ export function updateAircraft(
       targetAlt = glideslopeAltitude(distToThr, 0);
     } else {
       // Not yet established — steer toward localizer intercept
-      const approachSpd = AIRCRAFT_TYPES[ac.type]?.approachKts ?? 140;
+      const approachSpd = typeData(ac.type).approachKts;
 
       if (Math.abs(locDeviation) < 1.5 && distToThr < 14) {
         // On centreline close enough: establish

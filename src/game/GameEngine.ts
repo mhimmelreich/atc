@@ -1,13 +1,14 @@
 // filepath: src/game/GameEngine.ts
 import type { Airport } from '@/types/airport';
 import type { Aircraft, ATCCommand, ConflictPair, TrailPoint } from '@/types/aircraft';
-import type { LiveAircraft, LiveStatus, TrafficMode } from '@/types/live';
+import type { LiveAircraft, LiveInbound, LiveStatus, TrafficMode } from '@/types/live';
 import type { Waypoint, STAR } from '@/types/navdata';
 import type { RadioMessage } from '@/types/radio';
 import { AircraftManager } from './AircraftManager';
+import { inbound, callsIn, liveToAircraft, liveId, hexOf, type Inbound, type TakeoverContext } from './LiveTraffic';
 import { RadarRenderer, DEFAULT_DISPLAY, type DisplayOptions } from './RadarRenderer';
 import { headingDiff } from '@/utils/aviation';
-import { destinationPoint } from '@/utils/geo';
+import { destinationPoint, distanceNM } from '@/utils/geo';
 import { SCORE_LANDING, SCORE_GOAROUND, SCORE_SEPARATION_VIOLATION, SCORE_COLLISION } from './constants';
 
 const RADIO_LOG_SIZE = 50;
@@ -35,6 +36,8 @@ export interface GameState {
   radio: RadioMessage[];
   trafficMode: TrafficMode;
   live: LiveStatus;
+  /** Rufzeichen der echten Flieger (für Warnungen) */
+  liveNames: Record<string, string>;
 }
 
 export { type DisplayOptions };
@@ -54,6 +57,8 @@ export interface SessionData {
   display: DisplayOptions;
   activeRunwayIds: string[];
   trafficMode?: TrafficMode;
+  /** Übernommene echte Flieger: ihr echtes Gegenstück bleibt ausgeblendet */
+  liveHexes?: string[];
   viewLat: number;
   viewLng: number;
   aircraft: import('@/types/aircraft').Aircraft[];
@@ -82,7 +87,8 @@ export class GameEngine {
     activeRunwayIds: [],
     radio: [],
     trafficMode: 'sim',
-    live: { count: 0, updatedAt: null, error: false },
+    live: { count: 0, inbound: 0, updatedAt: null, error: false },
+    liveNames: {},
   };
   get rangeNM(): number { return this.state.rangeNM; }
   private onStateChange: StateCallback;
@@ -91,6 +97,9 @@ export class GameEngine {
   private conflictCooldowns = new Set<string>();
   private liveTraffic: LiveAircraft[] = [];
   private liveTrails = new Map<string, TrailPoint[]>();
+  private liveInbound = new Map<string, Inbound>(); // hex → Anflug zum gewählten Platz
+  private takenOver = new Set<string>();             // hex der übernommenen echten Flieger
+  private liveFrame: LiveAircraft[] = [];            // echte Flieger im letzten Bild (für Klicks)
 
   constructor(onStateChange: StateCallback) {
     this.onStateChange = onStateChange;
@@ -112,21 +121,14 @@ export class GameEngine {
             this.state = { ...this.state, score: this.state.score + penalty, violations: this.state.violations + 1 };
             setTimeout(() => this.conflictCooldowns.delete(key), 10000);
           }
-          const existing = this.conflicts.find((c) => c.a === event.pair!.a && c.b === event.pair!.b);
-          if (!existing) this.conflicts = [...this.conflicts, event.pair!];
+          this.conflicts = [...this.conflicts.filter((c) => !samePair(c, event.pair!)), event.pair!];
           break;
         }
-        case 'warning': {
-          const existing = this.conflicts.find((c) => c.a === event.pair!.a && c.b === event.pair!.b);
-          if (!existing) this.conflicts = [...this.conflicts, event.pair!];
+        case 'warning':
+          this.conflicts = [...this.conflicts.filter((c) => !samePair(c, event.pair!)), event.pair!];
           break;
-        }
         case 'clear':
-          if (event.pair) {
-            this.conflicts = this.conflicts.filter(
-              (c) => !(c.a === event.pair!.a && c.b === event.pair!.b)
-            );
-          }
+          if (event.pair) this.conflicts = this.conflicts.filter((c) => !samePair(c, event.pair!));
           break;
         case 'radio':
           this.state = { ...this.state, radio: [...this.state.radio.slice(1 - RADIO_LOG_SIZE), event.message!] };
@@ -162,10 +164,10 @@ export class GameEngine {
     if (this.state.trafficMode === 'sim') for (let i = 0; i < 3; i++) this.manager.forceSpawn();
   }
 
-  /** SIM: erfundener Verkehr; LIVE: echte Flieger (adsb.lol), kein erfundener Verkehr */
+  /** SIM: erfundener Verkehr; LIVE: echte Flieger (adsb.lol), kein erfundener Verkehr, Echtzeit */
   setTrafficMode(mode: TrafficMode): void {
     if (mode === this.state.trafficMode) return;
-    this.state = { ...this.state, trafficMode: mode, selectedId: null };
+    this.state = { ...this.state, trafficMode: mode, selectedId: null, timeScale: mode === 'live' ? 1 : this.state.timeScale };
     this.manager.setSpawning(mode === 'sim');
     this.manager.clearTraffic();
     this.clearLive();
@@ -185,7 +187,30 @@ export class GameEngine {
       trails.set(ac.hex, !last || last.ts < ac.ts ? [...trail, { lat: ac.lat, lng: ac.lng, ts: ac.ts }].slice(-LIVE_TRAIL_MAX) : trail);
     }
     this.liveTrails = trails;
-    this.state = { ...this.state, live: { count: trails.size, updatedAt: Date.now(), error: false } };
+
+    // Anflüge zum gewählten Platz; zwischen 40 und 15 NM melden sie sich (nächster zuerst)
+    this.liveInbound.clear();
+    const calls: Array<{ ac: LiveAircraft; dist: number }> = [];
+    const airport = this.airport;
+    if (airport) {
+      for (const ac of list) {
+        const inb = this.takenOver.has(ac.hex) ? null : inbound(ac, airport);
+        if (!inb) continue;
+        this.liveInbound.set(ac.hex, inb);
+        if (callsIn(ac, inb, airport)) calls.push({ ac, dist: distanceNM(ac.lat, ac.lng, airport.lat, airport.lng) });
+      }
+      calls.sort((a, b) => a.dist - b.dist);
+      const ctx = this.takeoverContext(airport);
+      this.manager.setAnnouncements(calls.map(({ ac }) => liveToAircraft(ac, ctx, this.liveInbound.get(ac.hex)?.origin)));
+    }
+
+    const liveNames: Record<string, string> = {};
+    for (const ac of list) liveNames[liveId(ac.hex)] = ac.callsign;
+    this.state = {
+      ...this.state,
+      live: { count: trails.size, inbound: this.liveInbound.size, updatedAt: Date.now(), error: false },
+      liveNames,
+    };
   }
 
   setLiveError(): void {
@@ -195,7 +220,43 @@ export class GameEngine {
   private clearLive(): void {
     this.liveTraffic = [];
     this.liveTrails.clear();
-    this.state = { ...this.state, live: { count: 0, updatedAt: null, error: false } };
+    this.liveInbound.clear();
+    this.takenOver.clear();
+    this.liveFrame = [];
+    this.state = { ...this.state, live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {} };
+  }
+
+  /** Echten Anflug übernehmen: er wird lotsbar, sein echtes Gegenstück verschwindet vom Radar */
+  private takeOver(id: string): boolean {
+    const hex = hexOf(id);
+    const inb = hex ? this.liveInbound.get(hex) : undefined;
+    const ac = hex ? this.liveFrame.find((a) => a.hex === hex) : undefined;
+    if (!hex || !inb || !ac || !this.airport || this.state.trafficMode !== 'live') return false;
+    this.takenOver.add(hex);
+    this.liveInbound.delete(hex);
+    this.manager.adopt(liveToAircraft(ac, this.takeoverContext(this.airport), inb.origin, this.manager.announcedAs(id)));
+    this.trySave();
+    return true;
+  }
+
+  private takeoverContext(airport: Airport): TakeoverContext {
+    return { airport, stars: this.activeStars(), activeRunwayIds: this.state.activeRunwayIds };
+  }
+
+  /** Übernehmbare echte Anflüge an ihrer aktuellen Position (für Klicks aufs Radar) */
+  liveTargets(): Array<{ id: string; lat: number; lng: number }> {
+    return this.liveFrame
+      .filter((ac) => this.liveInbound.has(ac.hex))
+      .map((ac) => ({ id: liveId(ac.hex), lat: ac.lat, lng: ac.lng }));
+  }
+
+  /** Anflüge fürs Radarbild: Startplatz, geschätzt, schon gemeldet */
+  private inboundView(): Map<string, LiveInbound> {
+    const view = new Map<string, LiveInbound>();
+    for (const [hex, inb] of this.liveInbound) {
+      view.set(hex, { origin: inb.origin, guess: inb.kind === 'guess', called: !!this.manager.announcedAs(liveId(hex)) });
+    }
+    return view;
   }
 
   /** Echte Flieger auf die aktuelle Zeit vorausgerechnet (zwischen zwei Abfragen) */
@@ -203,7 +264,8 @@ export class GameEngine {
     const now = Date.now();
     const out: LiveAircraft[] = [];
     for (const ac of this.liveTraffic) {
-      if (ac.ground) continue;
+      // Übernommene Flieger lotst der Spieler, ihr echtes Gegenstück wird nicht gezeigt
+      if (ac.ground || this.takenOver.has(ac.hex)) continue;
       const dt = Math.min(LIVE_EXTRAPOLATE_MAX_S, Math.max(0, (now - ac.ts) / 1000));
       if (ac.gs === null || ac.track === null || dt === 0) { out.push(ac); continue; }
       const p = destinationPoint(ac.lat, ac.lng, ac.track, (ac.gs * dt) / 3600);
@@ -221,6 +283,11 @@ export class GameEngine {
       const dt = Math.min((ts - this.lastTs) / 1000, 0.1);
       this.lastTs = ts;
 
+      // Echter Verkehr: auf jetzt vorausgerechnet, Hindernis für die Staffelung
+      const live = this.state.trafficMode === 'live' ? this.liveNow() : [];
+      this.liveFrame = live;
+      this.manager.setObstacles(live.flatMap((ac) => (ac.altFt === null ? [] : [{ id: liveId(ac.hex), lat: ac.lat, lng: ac.lng, altitudeFt: ac.altFt }])));
+
       if (!this.state.paused) this.manager.update(dt * this.state.timeScale, ts);
 
       const aircraft = this.manager.getAll();
@@ -231,9 +298,8 @@ export class GameEngine {
       }
 
       // Remove conflicts where either aircraft has left the radar
-      this.conflicts = this.conflicts.filter((c) => {
-        return aircraft.some((ac) => ac.id === c.a) && aircraft.some((ac) => ac.id === c.b);
-      });
+      const present = new Set([...aircraft.map((ac) => ac.id), ...live.map((ac) => liveId(ac.hex))]);
+      this.conflicts = this.conflicts.filter((c) => present.has(c.a) && present.has(c.b));
 
       this.state = { ...this.state, aircraft, conflicts: this.conflicts, pendingCmdTypes };
       this.onStateChange(this.state);
@@ -256,7 +322,7 @@ export class GameEngine {
           stars: this.activeStars(),
           display: this.state.display,
           activeRunwayIds: this.state.activeRunwayIds,
-          live: this.state.trafficMode === 'live' ? { aircraft: this.liveNow(), trails: this.liveTrails } : undefined,
+          live: this.state.trafficMode === 'live' ? { aircraft: live, trails: this.liveTrails, inbound: this.inboundView() } : undefined,
         });
       }
 
@@ -271,7 +337,8 @@ export class GameEngine {
 
   pause():  void { this.state = { ...this.state, paused: true }; }
   resume(): void { this.state = { ...this.state, paused: false }; }
-  setTimeScale(s: number):    void { this.state = { ...this.state, timeScale: s };                                    this.trySave(); }
+  // LIVE läuft in Echtzeit, sonst laufen eigene und echte Flieger auseinander
+  setTimeScale(s: number):    void { this.state = { ...this.state, timeScale: this.state.trafficMode === 'live' ? 1 : s }; this.trySave(); }
   setSweep(enabled: boolean): void { this.state = { ...this.state, sweepEnabled: enabled };                          this.trySave(); }
   setRange(nm: number):       void { this.state = { ...this.state, rangeNM: Math.max(2, Math.min(200, nm)) };        this.trySave(); }
   setTrailLength(n: number):  void { this.state = { ...this.state, trailLength: n };                                 this.trySave(); }
@@ -348,7 +415,11 @@ export class GameEngine {
     this.previewAlt = aircraftId && targetAlt !== null ? { aircraftId, targetAlt } : null;
   }
 
-  selectAircraft(id: string | null): void { this.state = { ...this.state, selectedId: id }; }
+  selectAircraft(id: string | null): void {
+    // Klick auf einen echten Anflug übernimmt ihn
+    if (id && !this.manager.get(id)) this.takeOver(id);
+    this.state = { ...this.state, selectedId: id && this.manager.get(id) ? id : null };
+  }
   applyCommand(id: string, cmd: ATCCommand): void { this.manager.applyCommand(id, cmd, this.state.timeScale); }
   getSelectedAircraft(): Aircraft | undefined {
     if (!this.state.selectedId) return undefined;
@@ -372,6 +443,7 @@ export class GameEngine {
         display: this.state.display,
         activeRunwayIds: this.state.activeRunwayIds,
         trafficMode: this.state.trafficMode,
+        liveHexes: [...this.takenOver],
         viewLat: this.viewLat,
         viewLng: this.viewLng,
         aircraft: this.manager.exportAircraft(),
@@ -401,16 +473,22 @@ export class GameEngine {
       rangeNM: data.rangeNM,
       trailLength: data.trailLength,
       sweepEnabled: data.sweepEnabled,
-      timeScale: data.timeScale ?? 1,
+      timeScale: data.trafficMode === 'live' ? 1 : data.timeScale ?? 1,
       display: data.display ?? { ...DEFAULT_DISPLAY },
       activeRunwayIds: data.activeRunwayIds ?? [],
       trafficMode: data.trafficMode ?? 'sim',
     };
     this.manager.setSpawning(this.state.trafficMode === 'sim');
     this.manager.setSpawnStars(this.activeStars());
+    this.takenOver = new Set(data.liveHexes ?? []);
     this.viewLat = data.viewLat;
     this.viewLng = data.viewLng;
     this.manager.importAircraft(data.aircraft);
     this.manager.importPendingCommands(data.pendingCommands);
   }
+}
+
+/** Dasselbe Flieger-Paar, egal in welcher Reihenfolge */
+function samePair(x: ConflictPair, y: ConflictPair): boolean {
+  return (x.a === y.a && x.b === y.b) || (x.a === y.b && x.b === y.a);
 }

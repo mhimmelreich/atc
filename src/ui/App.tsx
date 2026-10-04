@@ -70,7 +70,7 @@ export function App() {
     paused: false, timeScale: 1, sweepEnabled: false, rangeNM: 80, trailLength: 6,
     pendingCmdTypes: {}, display: { ...DEFAULT_DISPLAY },
     activeRunwayIds: [], radio: [],
-    trafficMode: 'sim', live: { count: 0, updatedAt: null, error: false },
+    trafficMode: 'sim', live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {},
   });
   const [airport, setAirport] = useState<Airport | null>(null);
   const [navPoints, setNavPoints] = useState<Waypoint[]>([]);
@@ -145,7 +145,10 @@ export function App() {
     selectedIcaoRef.current = selectedIcao;
     setLoading(true);
     voice.clear();
+    // Antworten zu einem inzwischen abgewählten Platz verwerfen (schnelles Tippen, doppelter Effekt im Dev-Modus)
+    let cancelled = false;
     fetchAirportData(selectedIcao, sourcePref).then(({ airport: ap, waypoints: wps, stars: apStars, source }) => {
+      if (cancelled) return;
       // Unbekannter Platz (weder Navigraph noch OurAirports) → beim bisherigen bleiben
       if (source === 'generic' && lastGoodIcaoRef.current) {
         setIcaoError(`${selectedIcao} nicht gefunden`);
@@ -169,6 +172,7 @@ export function App() {
       }
       setLoading(false);
     });
+    return () => { cancelled = true; };
   }, [selectedIcao, sourcePref, voice]);
 
   // ── Echter Verkehr: alle 5 s abfragen, solange LIVE aktiv und der Tab sichtbar ist ──
@@ -305,7 +309,7 @@ export function App() {
             <span style={{ color: gameState.live.error ? '#ffaa00' : '#00ff88' }}>
               {gameState.live.updatedAt === null
                 ? (gameState.live.error ? 'keine Daten' : 'lädt…')
-                : `${gameState.live.count} AC · ${Math.round((Date.now() - gameState.live.updatedAt) / 1000)} s`}
+                : `${gameState.live.count} AC · ${gameState.live.inbound} IN · ${Math.round((Date.now() - gameState.live.updatedAt) / 1000)} s`}
             </span>
           )}
         </div>
@@ -423,7 +427,7 @@ export function App() {
       </div>
 
       {/* Alerts */}
-      <AlertBanner conflicts={gameState.conflicts} aircraft={gameState.aircraft} />
+      <AlertBanner conflicts={gameState.conflicts} aircraft={gameState.aircraft} names={gameState.liveNames} />
 
       {/* Traffic strips */}
       <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1 }}>
@@ -438,7 +442,7 @@ export function App() {
       {/* Score / controls */}
       <ScorePanel
         score={gameState.score} landings={gameState.landings} violations={gameState.violations}
-        paused={gameState.paused} timeScale={gameState.timeScale} sweepEnabled={gameState.sweepEnabled}
+        paused={gameState.paused} timeScale={gameState.timeScale} timeLocked={gameState.trafficMode === 'live'} sweepEnabled={gameState.sweepEnabled}
         onPause={() => engineRef.current?.pause()}
         onResume={() => engineRef.current?.resume()}
         onToggleSweep={() => engineRef.current?.setSweep(!gameState.sweepEnabled)}

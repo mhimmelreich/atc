@@ -46,6 +46,10 @@ export interface Aircraft {
   contacted?: boolean;
   /** Lotse hat den Flieger angesprochen ("radar contact") */
   identified?: boolean;
+  /** Übernommener echter Flieger (LIVE): Transponder-Adresse */
+  liveHex?: string;
+  /** Startplatz (echte Flieger, laut Flugroute) */
+  origin?: string;
 }
 
 export interface ConflictPair {

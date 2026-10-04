@@ -1,6 +1,8 @@
 // filepath: server/routes/traffic.ts
 // Echter Verkehr über adsb.lol (Daten unter ODbL, Quellenhinweis im Spiel).
 // Alle Spieler am selben Platz teilen sich eine Abfrage: Antwort 5 s zwischengespeichert.
+// Die Flugroute (Start- und Zielplatz) kommt von der Routen-Abfrage der adsb.lol-API (adsb.im,
+// Daten aus VRS standing-data, CC0).
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 
@@ -14,6 +16,13 @@ const MAX_POS_AGE_S = 30; // ältere Positionen sind kein brauchbares Radarziel 
 const RETRY_AFTER_MS = 15_000; // nach einem Fehler adsb.lol eine Weile in Ruhe lassen
 const STALE_MS = 30_000;       // so lange darf bei Fehlern der letzte Stand ausgeliefert werden
 const UPSTREAM_PER_MIN = 40;   // Obergrenze für Abfragen bei adsb.lol, egal wie viele Plätze angefragt werden
+
+const ROUTE_URL = 'https://adsb.im/api/0/routeset';
+const ROUTE_TTL_MS = 6 * 3600_000;   // Routen ändern sich kaum
+const ROUTE_MISS_TTL_MS = 3600_000;  // unbekannte Rufzeichen später noch einmal versuchen
+const ROUTE_BATCH = 100;
+const ROUTE_MIN_INTERVAL_MS = 15_000; // freundlich zur kostenlosen API: neue Rufzeichen gesammelt abfragen
+const AIRLINE_CALLSIGN = /^[A-Z]{3}\d[0-9A-Z]{0,3}$/;
 
 interface RawAircraft {
   hex: string;
@@ -46,6 +55,8 @@ export interface LiveAircraftDto {
   track: number | null;
   vs: number | null;
   squawk?: string;
+  /** Flugroute als ICAO-Kette, z. B. "EIDW-EDDF" (nur wenn bekannt und zur Position passend) */
+  route?: string;
   /** Alter der Position in Sekunden zum Zeitpunkt der Antwort */
   age: number;
 }
@@ -57,6 +68,45 @@ interface Snapshot {
 
 const cache = new Map<string, { snapshot?: Snapshot; pending?: Promise<Snapshot | undefined>; failedAt?: number }>();
 let upstreamCalls: number[] = [];
+
+// ── Routen ───────────────────────────────────────────────────────────────────
+const routes = new Map<string, { codes: string | null; at: number }>();
+let routeLookup: Promise<void> | null = null;
+let routeLookupAt = 0;
+
+const routeFresh = (r: { codes: string | null; at: number } | undefined, now: number) =>
+  !!r && now - r.at < (r.codes ? ROUTE_TTL_MS : ROUTE_MISS_TTL_MS);
+
+/** Fehlende Routen im Hintergrund nachladen; sie erscheinen mit der nächsten Abfrage */
+function lookupRoutes(aircraft: Snapshot['aircraft']): void {
+  const now = Date.now();
+  if (routeLookup || now - routeLookupAt < ROUTE_MIN_INTERVAL_MS) return;
+  for (const [cs, r] of routes) if (!routeFresh(r, now)) routes.delete(cs);
+  const missing = aircraft
+    .filter((a) => !a.ground && AIRLINE_CALLSIGN.test(a.callsign) && !routes.has(a.callsign))
+    .slice(0, ROUTE_BATCH);
+  if (missing.length === 0) return;
+  routeLookupAt = now;
+  routeLookup = fetch(ROUTE_URL, {
+    method: 'POST',
+    headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ planes: missing.map((a) => ({ callsign: a.callsign, lat: a.lat, lng: a.lng })) }),
+    signal: AbortSignal.timeout(10_000),
+  })
+    .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`adsb.im HTTP ${res.status}`))))
+    .then((list: Array<{ callsign?: string; airport_codes?: string; plausible?: boolean } | null>) => {
+      const found = new Map(list.filter((r) => r?.callsign).map((r) => [r!.callsign!, r!]));
+      const at = Date.now();
+      for (const a of missing) {
+        const r = found.get(a.callsign);
+        // Unplausibel heißt: Position passt nicht zur Route (z. B. Rufzeichen mit anderer Strecke)
+        const codes = r?.airport_codes && r.airport_codes !== 'unknown' && r.plausible !== false ? r.airport_codes : null;
+        routes.set(a.callsign, { codes, at });
+      }
+    })
+    .catch((err: Error) => console.error('routes:', err.message))
+    .finally(() => { routeLookup = null; });
+}
 
 function allowUpstream(now: number): boolean {
   upstreamCalls = upstreamCalls.filter((t) => now - t < 60_000);
@@ -73,7 +123,7 @@ function allowUpstream(now: number): boolean {
 function isRelevant(a: RawAircraft, callsign: string): boolean {
   const cat = a.category ?? '';
   if (/^(A7|B|C)/.test(cat)) return false;
-  return /^A[2-6]$/.test(cat) || /^[A-Z]{3}\d[0-9A-Z]{0,3}$/.test(callsign);
+  return /^A[2-6]$/.test(cat) || AIRLINE_CALLSIGN.test(callsign);
 }
 
 function mapAircraft(a: RawAircraft): Snapshot['aircraft'][number] | null {
@@ -149,12 +199,16 @@ router.get('/', async (req, res) => {
     res.status(503).json({ error: 'Live-Verkehr nicht verfügbar' });
     return;
   }
+  lookupRoutes(snapshot.aircraft);
   const sinceFetch = (Date.now() - snapshot.fetchedAt) / 1000;
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     source: 'adsb.lol',
     license: 'ODbL 1.0',
-    aircraft: snapshot.aircraft.map(({ seenPos, ...a }) => ({ ...a, age: Math.round((seenPos + sinceFetch) * 10) / 10 })),
+    aircraft: snapshot.aircraft.map(({ seenPos, ...a }) => {
+      const route = routes.get(a.callsign)?.codes;
+      return { ...a, ...(route ? { route } : {}), age: Math.round((seenPos + sinceFetch) * 10) / 10 };
+    }),
   });
 });
 

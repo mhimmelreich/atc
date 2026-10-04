@@ -76,7 +76,11 @@ function Overview() {
       <H>DEINE ROLLE IM SPIEL</H>
       <P>Du bist <B>Approach und Tower</B> zugleich. Die Flieger kommen auf ihrer STAR in deinen Bereich und melden sich bei dir. Deine Aufgabe: sie sicher gestaffelt hintereinander auf den Endanflug bringen, das ILS freigeben und die Landung freigeben.</P>
       <P>Gut gemacht ist es, wenn keiner durchstarten muss und sich nie zwei Flieger zu nahe kommen.</P>
+      <H>ECHTER VERKEHR (LIVE)</H>
       <P>Mit <B>TRAFFIC LIVE</B> zeigt das Radar statt des erfundenen Verkehrs die echten Flieger rund um den Platz, grau und mit Spur.</P>
+      <P><span style={{ color: '#78d7ff' }}>Hellblau</span> sind die echten Anflüge auf deinen Platz, mit ihrem Startplatz neben dem Rufzeichen (ohne bekannte Route steht dort ein „?“). Zwischen 40 und 15 NM vor dem Platz meldet sich der Pilot bei dir; bis du ihn übernimmst, blinkt er.</P>
+      <P><B>Übernehmen:</B> Klick auf den hellblauen Flieger oder auf seinen Anruf im Funk-Log. Er wird zu deinem Flieger und hört ab jetzt auf dich: Er folgt der nächstgelegenen STAR deiner aktiven Bahn; ist er schon auf dem Endanflug, behält er seine ILS-Freigabe. Sein echtes Gegenstück verschwindet vom Radar. Hat er sich noch nicht gemeldet, ruft er gleich an.</P>
+      <P>Punkte gibt es nur für Landungen übernommener Flieger. Zu den echten Fliegern hältst du denselben Abstand wie zu deinen eigenen; nach der ILS-Freigabe zählt das innerhalb von 15 NM um den Platz nicht mehr, dort ist der echte Tower zuständig. LIVE läuft in Echtzeit, ohne Zeitraffer.</P>
     </>
   );
 }
@@ -197,6 +201,7 @@ function Separation() {
         ]}
       />
       <P>Es reicht, wenn einer der beiden Abstände eingehalten ist: Zwei Flieger übereinander mit 1000 ft Unterschied sind gestaffelt.</P>
+      <P>Bei LIVE gilt das auch gegenüber den echten Fliegern, außer im Endanflug: Hat dein Flieger die ILS-Freigabe, zählen echte Flieger innerhalb von 15 NM um den Platz nicht mehr.</P>
       <P><B>Wirbelschleppen:</B> Hinter schweren Fliegern (H = Heavy, J = Super wie der A380) halten echte Lotsen 4 bis 6 NM Abstand. Das Spiel wertet nur die 3 NM, zeigt die Klasse aber auf dem Streifen.</P>
       <H>PUNKTE</H>
       <Table
@@ -224,9 +229,10 @@ function Controls() {
         ['Kontextmenü', 'Rechtsklick auf den Flieger (am Handy lange tippen)'],
         ['Karte verschieben', 'Ziehen mit der Maus oder dem Finger'],
         ['Zoomen', 'Mausrad oder RANGE'],
-        ['Verkehr', 'TRAFFIC: SIM ist erfundener Verkehr zum Lotsen, LIVE zeigt die echten Flieger (Beschriftung unter FL200)'],
+        ['Verkehr', 'TRAFFIC: SIM ist erfundener Verkehr zum Lotsen, LIVE zeigt die echten Flieger (Beschriftung unter FL200, Anflüge hellblau). Die Anzeige nennt alle Flieger (AC) und die Anflüge (IN).'],
+        ['Echten Anflug übernehmen', 'LIVE: Klick oder Rechtsklick auf einen hellblauen Flieger, oder Klick auf seinen Anruf im Funk-Log'],
         ['Landerichtung', 'ACTIVE RWY: Bahnen der Gegenrichtung schalten die Betriebsrichtung um'],
-        ['Zeitraffer', 'SESSION 1x bis 8x, Pause mit ⏸'],
+        ['Zeitraffer', 'SESSION 1x bis 8x (bei LIVE nur 1x), Pause mit ⏸'],
         ['Anzeige', 'Unten LABELS, ILS, NAVAID, STARs'],
         ['Funk', 'RADIO zeigt das Funk-Log, VOICE schaltet die Stimmen. Ton gibt es erst nach dem ersten Klick ins Spiel.'],
       ]}
@@ -243,6 +249,7 @@ function Credits() {
       <P>Anflugverfahren (STARs) und ILS: Navigraph AIRAC, nur zur privaten Nutzung freigeschaltet.</P>
       <P>Funknamen der Airlines: {link('https://openflights.org/data.php', 'OpenFlights')}, Open Database License (ODbL).</P>
       <P>Echter Verkehr (LIVE): {link('https://adsb.lol', 'adsb.lol')}, Open Database License (ODbL).</P>
+      <P>Start und Ziel der echten Flüge: Routen-Abfrage von adsb.lol (adsb.im), Routendaten aus {link('https://github.com/vradarserver/standing-data', 'VRS standing-data')} (CC0).</P>
       <H>STIMMEN</H>
       <P>Sprachausgabe mit {link('https://github.com/OHF-Voice/piper1-gpl', 'Piper')} (GPL-3.0), als eigener Dienst auf dem Server.</P>
       <P>Lotse: Stimme „joe“ (CC0). Piloten: Stimmen aus {link('https://www.openslr.org/141/', 'LibriTTS-R')} (Koizumi et al., CC BY 4.0) und dem {link('https://datashare.ed.ac.uk/handle/10283/3443', 'CSTR VCTK Corpus')} (University of Edinburgh, CC BY 4.0).</P>

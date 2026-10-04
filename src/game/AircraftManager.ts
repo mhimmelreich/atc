@@ -14,12 +14,20 @@ import {
   SEP_LATERAL_NM, SEP_VERTICAL_FT,
   WARN_LATERAL_NM, WARN_VERTICAL_FT,
   SPAWN_DISTANCE_NM, MAX_AIRCRAFT,
-  AIRCRAFT_TYPES, CALLSIGN_PREFIXES,
+  AIRCRAFT_TYPES, CALLSIGN_PREFIXES, typeData,
   SPAWN_INTERVAL_MIN_S, SPAWN_INTERVAL_MAX_S,
 } from './constants';
 
 type EventType = 'landing' | 'goaround' | 'conflict' | 'warning' | 'clear' | 'radio';
 type EventHandler = (event: { type: EventType; callsign?: string; pair?: ConflictPair; message?: RadioMessage }) => void;
+
+/** Echter Flieger (LIVE), zu dem die gelotsten Flieger Abstand halten müssen */
+export interface Traffic {
+  id: string;
+  lat: number;
+  lng: number;
+  altitudeFt: number;
+}
 
 const SPAWN_ATTEMPTS = 20;
 const SPAWN_MIN_LATERAL_NM = 8;
@@ -30,6 +38,11 @@ const CALL_IN_MIN_S = 3;
 const CALL_IN_MAX_S = 10;
 const CALL_SPACING_S = 6;
 const FINAL_CALL_NM = 4;
+// Übernommene echte Flieger melden sich gleich
+const ADOPT_CALL_MIN_S = 1;
+const ADOPT_CALL_MAX_S = 3;
+// Endanflug um den Platz: Abstand zu echtem Verkehr zählt dort nicht (Parallelbahnen, echter Tower)
+const FINAL_ZONE_NM = 15;
 
 interface SpawnCandidate {
   lat: number;
@@ -58,6 +71,10 @@ export class AircraftManager {
   private lastCallAt = -Infinity;
   /** Im LIVE-Betrieb entsteht kein erfundener Verkehr */
   private spawning = true;
+  // LIVE: echte Anflüge, die sich melden sollen (wartend) bzw. gemeldet haben (Stand beim Anruf)
+  private announcements = new Map<string, Aircraft>();
+  private announced = new Map<string, Aircraft>();
+  private obstacles: Traffic[] = [];
 
   constructor() {
     this.nextSpawnIn = this.randomSpawnInterval();
@@ -92,6 +109,34 @@ export class AircraftManager {
     this.pendingCommands = [];
     this.activePairs.clear();
     this.callIns.clear();
+    this.announcements.clear();
+    this.announced.clear();
+    this.obstacles = [];
+  }
+
+  /** LIVE: echte Anflüge, die sich jetzt melden sollen (nächster zuerst); wer schon gerufen hat oder gelotst wird, fällt heraus */
+  setAnnouncements(list: Aircraft[]): void {
+    this.announcements = new Map(
+      list.filter((ac) => !this.announced.has(ac.id) && !this.aircraft.has(ac.id)).map((ac) => [ac.id, ac]),
+    );
+  }
+
+  /** Stand des Erstanrufs eines echten Fliegers, falls er sich schon gemeldet hat */
+  announcedAs(id: string): Aircraft | undefined {
+    return this.announced.get(id);
+  }
+
+  /** LIVE: echten Flieger übernehmen; hat er sich noch nicht gemeldet, ruft er gleich an */
+  adopt(ac: Aircraft): void {
+    const called = this.announced.has(ac.id);
+    this.announcements.delete(ac.id);
+    this.aircraft.set(ac.id, { ...ac, contacted: called });
+    if (!called) this.callIns.set(ac.id, this.simTime + ADOPT_CALL_MIN_S + Math.random() * (ADOPT_CALL_MAX_S - ADOPT_CALL_MIN_S));
+  }
+
+  /** LIVE: echte Flieger, die nicht gelotst werden */
+  setObstacles(list: Traffic[]): void {
+    this.obstacles = list;
   }
 
   on(handler: EventHandler): void {
@@ -252,7 +297,6 @@ export class AircraftManager {
         // Durchstarten: Freigaben weg, Bahnkurs halten, auf 4000 ft steigen – der Lotse muss neu führen
         this.emit({ type: 'goaround', callsign: updated.callsign });
         this.say('pilot', updated, goAroundCall(updated));
-        const typeData = AIRCRAFT_TYPES[updated.type];
         this.aircraft.set(id, {
           ...updated,
           clearedILS: false,
@@ -260,7 +304,7 @@ export class AircraftManager {
           assignedRunway: undefined,
           targetHeading: runway ? Math.round(runway.heading) : updated.headingDeg,
           targetAltitude: Math.max(4000, Math.round(updated.altitudeFt / 1000) * 1000),
-          targetSpeed: Math.min(200, typeData?.cruiseKts ?? 200),
+          targetSpeed: Math.min(200, typeData(updated.type).cruiseKts),
           turnDirection: undefined,
         });
       } else {
@@ -285,6 +329,14 @@ export class AircraftManager {
       this.lastCallAt = this.simTime;
       return;
     }
+    // Danach echte Anflüge, die noch niemand übernommen hat
+    const live = this.announcements.values().next().value;
+    if (live) {
+      this.announcements.delete(live.id);
+      this.announced.set(live.id, live);
+      this.say('pilot', live, initialCall(live, this.radio));
+      this.lastCallAt = this.simTime;
+    }
   }
 
   /** Meldungen der Piloten: Localizer erfasst, kurzer Endanflug ohne Landefreigabe, Ende der STAR */
@@ -307,63 +359,55 @@ export class AircraftManager {
 
   private checkSeparation(): void {
     const list = Array.from(this.aircraft.values());
-    // Track which pairs are currently active this frame
+    const flags = new Map(list.map((ac) => [ac.id, { conflict: false, warning: false }]));
     const currentPairs = new Set<string>();
 
+    const check = (a: Traffic, b: Traffic) => {
+      const lat = distanceNM(a.lat, a.lng, b.lat, b.lng);
+      const vert = Math.abs(a.altitudeFt - b.altitudeFt);
+      const type = lat < SEP_LATERAL_NM && vert < SEP_VERTICAL_FT ? 'conflict'
+        : lat < WARN_LATERAL_NM && vert < WARN_VERTICAL_FT ? 'warning'
+        : null;
+      if (!type) return;
+      const key = [a.id, b.id].sort().join(':');
+      currentPairs.add(key);
+      for (const id of [a.id, b.id]) {
+        const f = flags.get(id);
+        if (f) f[type] = true;
+      }
+      // Neu oder Wechsel zwischen Warnung und Konflikt melden
+      if (this.activePairs.get(key) !== type) {
+        this.activePairs.set(key, type);
+        this.emit({ type, pair: { a: a.id, b: b.id, type, lateralNM: lat, verticalFt: vert } });
+      }
+    };
+
     for (let i = 0; i < list.length; i++) {
-      let conflictI = false;
-      let warningI = false;
-      for (let j = i + 1; j < list.length; j++) {
-        const a = list[i];
-        const b = list[j];
-        const lat = distanceNM(a.lat, a.lng, b.lat, b.lng);
-        const vert = Math.abs(a.altitudeFt - b.altitudeFt);
-        const key = [a.id, b.id].sort().join(':');
+      for (let j = i + 1; j < list.length; j++) check(list[i], list[j]);
+    }
+    // Echter Verkehr zählt wie eigener, echte Flieger untereinander nicht
+    for (const ac of list) {
+      for (const o of this.obstacles) if (!this.finalZone(ac, o)) check(ac, o);
+    }
 
-        const isConflict = lat < SEP_LATERAL_NM && vert < SEP_VERTICAL_FT;
-        const isWarning = !isConflict && lat < WARN_LATERAL_NM && vert < WARN_VERTICAL_FT;
-
-        if (isConflict) {
-          conflictI = true;
-          currentPairs.add(key);
-          const bUpdated = this.aircraft.get(b.id);
-          if (bUpdated) this.aircraft.set(b.id, { ...bUpdated, conflict: true, warning: false });
-          if (this.activePairs.get(key) !== 'conflict') {
-            this.activePairs.set(key, 'conflict');
-            this.emit({ type: 'conflict', pair: { a: a.id, b: b.id, type: 'conflict', lateralNM: lat, verticalFt: vert } });
-          }
-        } else if (isWarning) {
-          warningI = true;
-          currentPairs.add(key);
-          const bUpdated = this.aircraft.get(b.id);
-          if (bUpdated) this.aircraft.set(b.id, { ...bUpdated, conflict: false, warning: true });
-          if (!this.activePairs.has(key)) {
-            this.activePairs.set(key, 'warning');
-            this.emit({ type: 'warning', pair: { a: a.id, b: b.id, type: 'warning', lateralNM: lat, verticalFt: vert } });
-          } else if (this.activePairs.get(key) === 'conflict') {
-            // downgrade conflict → warning
-            this.activePairs.set(key, 'warning');
-            this.emit({ type: 'warning', pair: { a: a.id, b: b.id, type: 'warning', lateralNM: lat, verticalFt: vert } });
-          }
-        } else {
-          const bUpdated = this.aircraft.get(b.id);
-          if (bUpdated) this.aircraft.set(b.id, { ...bUpdated, conflict: false, warning: false });
-        }
-      }
-      const aUpdated = this.aircraft.get(list[i].id);
-      if (aUpdated) {
-        this.aircraft.set(list[i].id, { ...aUpdated, conflict: conflictI, warning: warningI && !conflictI });
-      }
+    for (const ac of list) {
+      const f = flags.get(ac.id)!;
+      this.aircraft.set(ac.id, { ...ac, conflict: f.conflict, warning: f.warning && !f.conflict });
     }
 
     // Emit clear for pairs no longer active
-    for (const [key, _] of this.activePairs) {
+    for (const key of this.activePairs.keys()) {
       if (!currentPairs.has(key)) {
         const [aId, bId] = key.split(':');
         this.activePairs.delete(key);
         this.emit({ type: 'clear', pair: { a: aId, b: bId, type: 'warning', lateralNM: 0, verticalFt: 0 } });
       }
     }
+  }
+
+  /** Im Endanflug lotst bei echtem Verkehr der echte Tower; Parallelanflüge wären sonst ständig "Konflikte" */
+  private finalZone(ac: Aircraft, o: Traffic): boolean {
+    return ac.clearedILS && !!this.airport && distanceNM(o.lat, o.lng, this.airport.lat, this.airport.lng) < FINAL_ZONE_NM;
   }
 
   private spawnCandidate(): SpawnCandidate {
@@ -429,7 +473,7 @@ export class AircraftManager {
 
     const types = Object.keys(AIRCRAFT_TYPES);
     const type = types[Math.floor(Math.random() * types.length)];
-    const typeData = AIRCRAFT_TYPES[type];
+    const perf = AIRCRAFT_TYPES[type];
     const callsign = this.generateCallsign();
     const id = `${callsign}-${Date.now()}`;
 
@@ -441,11 +485,11 @@ export class AircraftManager {
       lng,
       altitudeFt: initAlt,
       headingDeg: initHdg,
-      speedKts: typeData.cruiseKts,
+      speedKts: perf.cruiseKts,
       verticalSpeedFpm: 0,
       targetHeading: initHdg,
       targetAltitude: initAlt,
-      targetSpeed: typeData.cruiseKts,
+      targetSpeed: perf.cruiseKts,
       state: 'enroute',
       clearedILS: false,
       starId,

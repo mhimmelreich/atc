@@ -6,7 +6,7 @@ import type { STAR, Waypoint } from '@/types/navdata';
 import { distanceNM } from '@/utils/geo';
 import { getILSStatusForRunway } from '@/game/ILS';
 import { normaliseHdg, headingDiff } from '@/utils/aviation';
-import { AIRCRAFT_TYPES } from '@/game/constants';
+import { typeData } from '@/game/constants';
 
 export interface ContextMenuState {
   x: number;
@@ -102,8 +102,7 @@ export function ContextMenu({ menu, airport, onCommand, onClose, onHeadingPrevie
   const y = Math.max(4, Math.min(menu.y, window.innerHeight - 424));
 
   const cmd = (c: ATCCommand) => { onCommand(ac.id, c); onClose(); };
-  const typeData = AIRCRAFT_TYPES[ac.type];
-  const approachSpd = typeData?.approachKts ?? 140;
+  const approachSpd = typeData(ac.type).approachKts;
 
   // Alle ILS-Bahnen der aktiven Richtung (ohne aktive Auswahl: alle ILS-Bahnen)
   const ilsRunways = airport?.runways.filter((rwy) =>

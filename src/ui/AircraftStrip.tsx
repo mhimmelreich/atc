@@ -1,6 +1,6 @@
 // filepath: src/ui/AircraftStrip.tsx
 import type { Aircraft } from '@/types/aircraft';
-import { AIRCRAFT_TYPES } from '@/game/constants';
+import { typeData } from '@/game/constants';
 
 const STATE_COLORS: Record<string, string> = {
   enroute: '#666',
@@ -40,7 +40,7 @@ export function AircraftStrip({ aircraft, selectedId, onSelect }: Props) {
         const selected = ac.id === selectedId;
         const fl = Math.round(ac.altitudeFt / 100);
         const stateColor = ac.conflict ? '#ff3333' : ac.warning ? '#ffaa00' : STATE_COLORS[ac.state] ?? '#666';
-        const wake = AIRCRAFT_TYPES[ac.type]?.wake;
+        const wake = typeData(ac.type).wake;
 
         return (
           <div
@@ -72,6 +72,8 @@ export function AircraftStrip({ aircraft, selectedId, onSelect }: Props) {
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 3, fontSize: 11, color: '#888', alignItems: 'center' }}>
               <span style={{ color: '#aaa' }}>{ac.type}</span>
+              {/* Übernommener echter Flieger: Startplatz in der Farbe der echten Anflüge */}
+              {ac.origin && <span style={{ color: '#78d7ff' }} title="Startplatz (echter Flug)">{ac.origin}</span>}
               {wake === 'H' && (
                 <span style={{ color: '#000', background: '#ffaa00', padding: '0px 4px', borderRadius: 2, fontSize: 9, fontWeight: 'bold', letterSpacing: 0.5 }}>H</span>
               )}

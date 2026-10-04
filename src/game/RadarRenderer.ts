@@ -1,7 +1,7 @@
 // filepath: src/game/RadarRenderer.ts
 import type { Aircraft, ConflictPair, TrailPoint } from '@/types/aircraft';
-import type { LiveAircraft } from '@/types/live';
-import { AIRCRAFT_TYPES } from './constants';
+import type { LiveAircraft, LiveInbound } from '@/types/live';
+import { typeData } from './constants';
 import type { Airport, AirportLayer, OsmWay } from '@/types/airport';
 import type { Waypoint, STAR } from '@/types/navdata';
 import { destinationPoint, toRad } from '@/utils/geo';
@@ -53,6 +53,7 @@ const C = {
   LIVE:             'rgba(170,190,180,0.85)',
   LIVE_LABEL:       'rgba(150,170,160,0.85)',
   LIVE_TRAIL:       'rgba(150,170,160,',
+  LIVE_INBOUND:     'rgba(120,215,255,0.95)',
 };
 
 // Echte Flieger: Beschriftung nur unterhalb dieser Höhe (darüber Überflieger ohne Bezug zum Platz)
@@ -89,8 +90,8 @@ export interface RenderOptions {
   stars: STAR[];
   display: DisplayOptions;
   activeRunwayIds: string[];
-  /** Echte Flieger (LIVE), nicht gelotst */
-  live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]> };
+  /** Echte Flieger (LIVE), nicht gelotst; inbound: Anflüge zum Platz, die man übernehmen kann (hex → Info) */
+  live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]>; inbound: Map<string, LiveInbound> };
 }
 
 export class RadarRenderer {
@@ -181,7 +182,9 @@ export class RadarRenderer {
       this.drawWaypoints(opts.waypoints, ll2c, W, H);
     }
 
-    const acMap = new Map(opts.aircraft.map((a) => [a.id, a]));
+    // Konflikte auch mit echten Fliegern (Kennung live-<hex>)
+    const acMap = new Map<string, { lat: number; lng: number }>(opts.aircraft.map((a) => [a.id, a]));
+    for (const ac of opts.live?.aircraft ?? []) acMap.set(`live-${ac.hex}`, ac);
     this.drawConflicts(opts.conflicts, acMap, ll2c);
 
     // Predicted track arc (drawn below aircraft symbols)
@@ -196,7 +199,7 @@ export class RadarRenderer {
       if (previewAc) this.drawAltitudeReachCircle(previewAc, opts.previewAltitude.targetAlt, ll2c);
     }
 
-    if (opts.live) this.drawLive(opts.live, ll2c, W, H, opts.trailLength, opts.display.labels);
+    if (opts.live) this.drawLive(opts.live, ll2c, W, H, opts.trailLength, opts.display.labels, opts.now);
 
     for (const ac of opts.aircraft) this.drawTrail(ac, ll2c, opts.trailLength);
     for (const ac of opts.aircraft) {
@@ -234,11 +237,15 @@ export class RadarRenderer {
     W: number, H: number,
     trailLength: number,
     showLabels: boolean,
+    now: number,
   ): void {
     const { ctx } = this;
     for (const ac of live.aircraft) {
       const p = ll2c(ac.lat, ac.lng);
       if (p.x < -40 || p.x > W + 40 || p.y < -40 || p.y > H + 40) continue;
+      // Anflug zum Platz: hellblau und immer beschriftet; hat er sich gemeldet, blinkt er bis zur Übernahme
+      const inbound = live.inbound.get(ac.hex);
+      const color = inbound ? C.LIVE_INBOUND : C.LIVE;
 
       const trail = (live.trails.get(ac.hex) ?? []).slice(-trailLength);
       trail.forEach((t, i) => {
@@ -248,9 +255,13 @@ export class RadarRenderer {
       });
 
       // Radarziel als Quadrat mit Vektor für eine Minute Flugweg
-      ctx.strokeStyle = C.LIVE;
+      ctx.strokeStyle = color;
       ctx.lineWidth = 1;
       ctx.strokeRect(p.x - 3, p.y - 3, 6, 6);
+      if (inbound?.called && Math.floor(now / 500) % 2 === 0) {
+        ctx.fillStyle = color;
+        ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+      }
       if (ac.gs !== null && ac.track !== null) {
         const ahead = destinationPoint(ac.lat, ac.lng, ac.track, ac.gs / 60);
         const q = ll2c(ahead.lat, ahead.lng);
@@ -260,13 +271,15 @@ export class RadarRenderer {
         ctx.stroke();
       }
 
-      if (showLabels && ac.altFt !== null && ac.altFt < LIVE_LABEL_MAX_FT) {
+      if (showLabels && ac.altFt !== null && (inbound || ac.altFt < LIVE_LABEL_MAX_FT)) {
         const fl = Math.round(ac.altFt / 100).toString().padStart(3, '0');
         const vs = (ac.vs ?? 0) > 300 ? '↑' : (ac.vs ?? 0) < -300 ? '↓' : '→';
-        ctx.fillStyle = C.LIVE_LABEL;
+        ctx.fillStyle = inbound ? C.LIVE_INBOUND : C.LIVE_LABEL;
         ctx.font = '10px "Courier New"';
         ctx.textAlign = 'left';
-        ctx.fillText(ac.callsign, p.x + 8, p.y - 3);
+        // Anflüge mit Startplatz, ohne bekannte Route mit "?"
+        const from = inbound ? ` ${inbound.guess ? '?' : inbound.origin ?? ''}` : '';
+        ctx.fillText(`${ac.callsign}${from}`, p.x + 8, p.y - 3);
         ctx.fillText(`FL${fl} ${vs} ${ac.gs !== null ? Math.round(ac.gs) : ''}`, p.x + 8, p.y + 8);
       }
     }
@@ -668,7 +681,7 @@ export class RadarRenderer {
   // ── Conflict lines ─────────────────────────────────────────────────────────
   private drawConflicts(
     conflicts: ConflictPair[],
-    acMap: Map<string, Aircraft>,
+    acMap: Map<string, { lat: number; lng: number }>,
     ll2c: (lat: number, lng: number) => { x: number; y: number }
   ): void {
     const { ctx } = this;
@@ -902,7 +915,7 @@ export class RadarRenderer {
       const fl  = Math.round(ac.altitudeFt / 100);
       const spd = Math.round(ac.speedKts);
       const vs  = ac.verticalSpeedFpm > 100 ? '↑' : ac.verticalSpeedFpm < -100 ? '↓' : '→';
-      const wake = AIRCRAFT_TYPES[ac.type]?.wake;
+      const wake = typeData(ac.type).wake;
 
       ctx.fillStyle  = color;
       ctx.font       = `${selected ? 'bold ' : ''}11px "Courier New"`;
