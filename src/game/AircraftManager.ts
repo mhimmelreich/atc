@@ -127,8 +127,8 @@ export class AircraftManager {
   }
 
   /** Hinweis des Spiels im Funk-Log, z. B. ein Wechsel der Landerichtung */
-  info(text: string): void {
-    this.emit({ type: 'radio', message: { id: ++this.radioSeq, ts: Date.now(), from: 'info', callsign: '', text, spoken: '', ...APPROACH_VOICE } });
+  info(text: string, aircraftId?: string, callsign = ''): void {
+    this.emit({ type: 'radio', message: { id: ++this.radioSeq, ts: Date.now(), from: 'info', aircraftId, callsign, text, spoken: '', ...APPROACH_VOICE } });
   }
 
   setSpawnStars(stars: STAR[]): void {

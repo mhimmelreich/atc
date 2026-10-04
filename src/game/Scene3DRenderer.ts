@@ -46,6 +46,7 @@ const COL = {
   GREEN: '#00ff88', AMBER: '#ffaa00', RED: '#ff3333', BLUE: '#4488ff', YELLOW: '#ffdd00', WHITE: '#cccccc',
   LIVE: 'rgba(170,190,180,0.85)',
   LIVE_INBOUND: 'rgba(120,215,255,0.95)',
+  LIVE_OUTBOUND: 'rgba(255,190,90,0.95)',
 };
 
 /** Perspektivische Ansicht der Szene: Boden in NM, Höhe überhöht, Kamera kreist um den Blickpunkt */
@@ -399,18 +400,20 @@ export class Scene3DRenderer {
       const c = this.camSpace(v);
       if (c.z < this.near) continue;
       const inbound = o.live!.inbound.get(ac.hex);
+      const selected = o.selectedId === `live-${ac.hex}`;
       items.push({ depth: c.z, draw: () => {
-        const color = inbound ? COL.LIVE_INBOUND : COL.LIVE;
-        this.drawTrail(`live-${ac.hex}`, inbound ? '120,215,255' : '150,170,160', trailN);
+        const color = inbound?.out ? COL.LIVE_OUTBOUND : inbound ? COL.LIVE_INBOUND : COL.LIVE;
+        this.drawTrail(`live-${ac.hex}`, inbound?.out ? '255,190,90' : inbound ? '120,215,255' : '150,170,160', trailN);
         const p = this.drawStem(v, color, 0.25);
         if (!p) return;
         this.ctx.strokeStyle = color;
         this.ctx.lineWidth = 1;
         this.ctx.strokeRect(p.x - 3, p.y - 3, 6, 6);
+        if (selected) { this.ctx.beginPath(); this.ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); this.ctx.stroke(); }
         if (inbound?.called && Math.floor(o.now / 500) % 2 === 0) { this.ctx.fillStyle = color; this.ctx.fillRect(p.x - 3, p.y - 3, 6, 6); }
-        if (o.display.labels && ac.altFt !== null && (inbound || ac.altFt < LIVE_LABEL_MAX_FT)) {
+        if (ac.altFt !== null && (selected || (o.display.labels && (inbound || ac.altFt < LIVE_LABEL_MAX_FT)))) {
           const fl = Math.round(ac.altFt / 100).toString().padStart(3, '0');
-          const from = inbound ? ` ${inbound.guess ? '?' : inbound.origin ?? ''}` : '';
+          const from = inbound?.out ? ` →${inbound.dest ?? ''}` : inbound ? ` ${inbound.guess ? '?' : inbound.origin ?? ''}` : '';
           this.ctx.fillStyle = color;
           this.ctx.font = '10px "Courier New"';
           this.ctx.textAlign = 'left';

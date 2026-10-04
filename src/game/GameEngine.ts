@@ -26,6 +26,11 @@ const LIVE_FINALS_MEMORY_MS = 10 * 60_000;
 const LIVE_FINALS_SWITCH = 2;
 // Bahnen gleicher Betriebsrichtung (Parallelbahnen)
 const SAME_DIRECTION_DEG = 20;
+// WATCH: Start erkannt, solange der Flieger nah am Platz, tief und steigend ist
+const DEPARTURE_MAX_NM = 8;
+const DEPARTURE_MAX_FT = 5000;
+const DEPARTURE_MIN_VS = 500;
+const WATCH_EVENT_MEMORY_MS = 15 * 60_000;
 
 /** Woher die aktiven Bahnen kommen: Standard, Wind (METAR), echte Landungen (LIVE) oder von Hand */
 export type RunwaySource = 'default' | 'wind' | 'live' | 'manual';
@@ -56,6 +61,10 @@ export interface GameState {
   /** Wetter am Platz (METAR), null solange unbekannt */
   weather: Weather | null;
   runwaySource: RunwaySource;
+  /** WATCH: echte Flieger im aktuellen Bild (für Liste und Detailanzeige) */
+  watch: LiveAircraft[];
+  /** WATCH: Anflüge und Abflüge des gewählten Platzes, nach hex */
+  watchRoles: Record<string, LiveInbound>;
 }
 
 export { type DisplayOptions };
@@ -114,6 +123,8 @@ export class GameEngine {
     liveNames: {},
     weather: null,
     runwaySource: 'default',
+    watch: [],
+    watchRoles: {},
   };
   get rangeNM(): number { return this.state.rangeNM; }
   private onStateChange: StateCallback;
@@ -126,6 +137,12 @@ export class GameEngine {
   private takenOver = new Set<string>();             // hex der übernommenen echten Flieger
   private liveFrame: LiveAircraft[] = [];            // echte Flieger im letzten Bild (für Klicks)
   private liveFinals = new Map<string, { heading: number; at: number }>(); // hex → Bahnkurs, zuletzt im Endanflug gesehen
+  private liveDepartures = new Map<string, number>();                       // WATCH: hex → zuletzt beim Start gesehen
+  private liveOutbound = new Map<string, string | undefined>();              // WATCH: hex → Zielplatz der Abflüge
+
+  /** Echte Flieger auf dem Radar (LIVE zum Lotsen, WATCH nur zum Zuschauen) */
+  private get liveMode(): boolean { return this.state.trafficMode !== 'sim'; }
+  private get watching(): boolean { return this.state.trafficMode === 'watch'; }
 
   constructor(onStateChange: StateCallback) {
     this.onStateChange = onStateChange;
@@ -190,23 +207,29 @@ export class GameEngine {
     this.manager.setSpawnStars(this.activeStars());
     this.clearLive();
     this.liveFinals.clear();
+    this.liveDepartures.clear();
     if (this.state.trafficMode === 'sim') for (let i = 0; i < 3; i++) this.manager.forceSpawn();
   }
 
-  /** SIM: erfundener Verkehr; LIVE: echte Flieger (adsb.lol), kein erfundener Verkehr, Echtzeit */
+  /**
+   * SIM: erfundener Verkehr; LIVE: echte Flieger (adsb.lol), kein erfundener Verkehr, Echtzeit;
+   * WATCH: nur echte Flieger in Echtzeit zum Zuschauen, ohne Lotsen, Funk der Piloten und Punkte
+   */
   setTrafficMode(mode: TrafficMode): void {
     if (mode === this.state.trafficMode) return;
-    this.state = { ...this.state, trafficMode: mode, selectedId: null, timeScale: mode === 'live' ? 1 : this.state.timeScale };
+    this.state = { ...this.state, trafficMode: mode, selectedId: null, timeScale: mode !== 'sim' ? 1 : this.state.timeScale, paused: false };
     this.manager.setSpawning(mode === 'sim');
     this.manager.clearTraffic();
+    this.manager.setAnnouncements([]);
     this.clearLive();
     this.liveFinals.clear();
+    this.liveDepartures.clear();
     if (mode === 'sim' && this.airport) for (let i = 0; i < 3; i++) this.manager.forceSpawn();
     this.trySave();
   }
 
   setLiveTraffic(list: LiveAircraft[]): void {
-    if (this.state.trafficMode !== 'live') return;
+    if (!this.liveMode) return;
     this.liveTraffic = list;
     // Spur aus den gemeldeten Positionen
     const trails = new Map<string, TrailPoint[]>();
@@ -218,6 +241,7 @@ export class GameEngine {
     }
     this.liveTrails = trails;
     this.detectRunwayInUse(list);
+    if (this.watching) this.detectDepartures(list);
 
     // Anflüge zum gewählten Platz; zwischen 60 und 25 NM melden sie sich (nächster zuerst)
     this.liveInbound.clear();
@@ -232,7 +256,18 @@ export class GameEngine {
       }
       calls.sort((a, b) => a.dist - b.dist);
       const ctx = this.takeoverContext(airport);
-      this.manager.setAnnouncements(calls.map(({ ac }) => liveToAircraft(ac, ctx, this.liveInbound.get(ac.hex)?.origin)));
+      // WATCH: niemand ruft an, es wird nur zugeschaut
+      this.manager.setAnnouncements(this.watching ? [] : calls.map(({ ac }) => liveToAircraft(ac, ctx, this.liveInbound.get(ac.hex)?.origin)));
+      // WATCH: Abflüge laut Route (gewählter Platz vor dem Ziel)
+      this.liveOutbound.clear();
+      if (this.watching) {
+        for (const ac of list) {
+          if (!ac.route || this.liveInbound.has(ac.hex)) continue;
+          const codes = ac.route.split('-');
+          const idx = codes.indexOf(airport.icao);
+          if (idx >= 0 && idx < codes.length - 1) this.liveOutbound.set(ac.hex, codes[idx + 1]);
+        }
+      }
     }
 
     const liveNames: Record<string, string> = {};
@@ -260,9 +295,10 @@ export class GameEngine {
     this.liveTraffic = [];
     this.liveTrails.clear();
     this.liveInbound.clear();
+    this.liveOutbound.clear();
     this.takenOver.clear();
     this.liveFrame = [];
-    this.state = { ...this.state, live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {} };
+    this.state = { ...this.state, live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {}, watch: [], watchRoles: {} };
   }
 
   /** Echten Anflug übernehmen: er wird lotsbar, sein echtes Gegenstück verschwindet vom Radar */
@@ -282,10 +318,10 @@ export class GameEngine {
     return { airport, stars: this.activeStars(), activeRunwayIds: this.state.activeRunwayIds };
   }
 
-  /** Übernehmbare echte Anflüge an ihrer aktuellen Position (für Klicks aufs Radar) */
+  /** Übernehmbare echte Anflüge (WATCH: alle echten Flieger) an ihrer aktuellen Position (für Klicks aufs Radar) */
   liveTargets(): Array<{ id: string; lat: number; lng: number; altitudeFt: number }> {
     return this.liveFrame
-      .filter((ac) => this.liveInbound.has(ac.hex))
+      .filter((ac) => this.watching || this.liveInbound.has(ac.hex))
       .map((ac) => ({ id: liveId(ac.hex), lat: ac.lat, lng: ac.lng, altitudeFt: ac.altFt ?? 0 }));
   }
 
@@ -295,6 +331,7 @@ export class GameEngine {
     for (const [hex, inb] of this.liveInbound) {
       view.set(hex, { origin: inb.origin, guess: inb.kind === 'guess', called: !!this.manager.announcedAs(liveId(hex)) });
     }
+    for (const [hex, dest] of this.liveOutbound) view.set(hex, { guess: false, called: false, out: true, dest });
     return view;
   }
 
@@ -323,7 +360,7 @@ export class GameEngine {
       this.lastTs = ts;
 
       // Echter Verkehr: auf jetzt vorausgerechnet, Hindernis für die Staffelung
-      const live = this.state.trafficMode === 'live' ? this.liveNow() : [];
+      const live = this.liveMode ? this.liveNow() : [];
       this.liveFrame = live;
       this.manager.setObstacles(live.flatMap((ac) => (ac.altFt === null ? [] : [{ id: liveId(ac.hex), lat: ac.lat, lng: ac.lng, altitudeFt: ac.altFt }])));
 
@@ -340,7 +377,15 @@ export class GameEngine {
       const present = new Set([...aircraft.map((ac) => ac.id), ...live.map((ac) => liveId(ac.hex))]);
       this.conflicts = this.conflicts.filter((c) => present.has(c.a) && present.has(c.b));
 
-      this.state = { ...this.state, aircraft, conflicts: this.conflicts, pendingCmdTypes };
+      const roles = this.liveMode ? this.inboundView() : new Map<string, LiveInbound>();
+      // WATCH: gewählter Flieger weg (gelandet, außer Reichweite) → Auswahl aufheben
+      let selectedId = this.state.selectedId;
+      if (this.watching && selectedId && !live.some((ac) => liveId(ac.hex) === selectedId)) selectedId = null;
+      this.state = {
+        ...this.state, aircraft, conflicts: this.conflicts, pendingCmdTypes, selectedId,
+        watch: this.watching ? live : this.state.watch.length ? [] : this.state.watch,
+        watchRoles: this.watching ? Object.fromEntries(roles) : this.state.watch.length ? {} : this.state.watchRoles,
+      };
       this.onStateChange(this.state);
 
       if (this.renderer && this.airport) {
@@ -361,7 +406,7 @@ export class GameEngine {
           stars: this.activeStars(),
           display: this.state.display,
           activeRunwayIds: this.state.activeRunwayIds,
-          live: this.state.trafficMode === 'live' ? { aircraft: live, trails: this.liveTrails, inbound: this.inboundView() } : undefined,
+          live: this.liveMode ? { aircraft: live, trails: this.liveTrails, inbound: roles } : undefined,
         };
         if (this.view3D && this.scene3d) this.scene3d.render(opts, this.camera);
         else this.renderer.render(opts);
@@ -379,7 +424,7 @@ export class GameEngine {
   pause():  void { this.state = { ...this.state, paused: true }; }
   resume(): void { this.state = { ...this.state, paused: false }; }
   // LIVE läuft in Echtzeit, sonst laufen eigene und echte Flieger auseinander
-  setTimeScale(s: number):    void { this.state = { ...this.state, timeScale: this.state.trafficMode === 'live' ? 1 : s }; this.trySave(); }
+  setTimeScale(s: number):    void { this.state = { ...this.state, timeScale: this.liveMode ? 1 : s }; this.trySave(); }
   setSweep(enabled: boolean): void { this.state = { ...this.state, sweepEnabled: enabled };                          this.trySave(); }
   setRange(nm: number):       void { this.state = { ...this.state, rangeNM: Math.max(2, Math.min(200, nm)) };        this.trySave(); }
   setTrailLength(n: number):  void { this.state = { ...this.state, trailLength: n };                                 this.trySave(); }
@@ -501,7 +546,12 @@ export class GameEngine {
     const now = Date.now();
     for (const ac of list) {
       const rwy = landingRunway(ac, airport);
-      if (rwy) this.liveFinals.set(ac.hex, { heading: rwy.heading, at: now });
+      if (!rwy) continue;
+      // WATCH: jeden Endanflug einmal im Log melden
+      if (this.watching && !this.liveFinals.has(ac.hex)) {
+        this.manager.info(`${ac.callsign}${ac.type ? ` (${ac.type})` : ''} im Endanflug ${rwy.id}`, liveId(ac.hex), ac.callsign);
+      }
+      this.liveFinals.set(ac.hex, { heading: rwy.heading, at: now });
     }
     for (const [hex, f] of this.liveFinals) if (now - f.at > LIVE_FINALS_MEMORY_MS) this.liveFinals.delete(hex);
     if (this.state.runwaySource === 'manual') return;
@@ -522,6 +572,24 @@ export class GameEngine {
       this.state = { ...this.state, runwaySource: 'live' };
       this.trySave();
     }
+  }
+
+  /** WATCH: Starts vom gewählten Platz einmal im Log melden (nah, tief, steigend) */
+  private detectDepartures(list: LiveAircraft[]): void {
+    const airport = this.airport;
+    if (!airport) return;
+    const now = Date.now();
+    for (const ac of list) {
+      if (ac.ground || ac.altFt === null || (ac.vs ?? 0) < DEPARTURE_MIN_VS) continue;
+      if (ac.altFt - airport.elevationFt > DEPARTURE_MAX_FT) continue;
+      if (distanceNM(ac.lat, ac.lng, airport.lat, airport.lng) > DEPARTURE_MAX_NM) continue;
+      if (!this.liveDepartures.has(ac.hex)) {
+        const dest = this.liveOutbound.get(ac.hex);
+        this.manager.info(`${ac.callsign}${ac.type ? ` (${ac.type})` : ''} gestartet${dest ? `, nach ${dest}` : ''}`, liveId(ac.hex), ac.callsign);
+      }
+      this.liveDepartures.set(ac.hex, now);
+    }
+    for (const [hex, at] of this.liveDepartures) if (now - at > WATCH_EVENT_MEMORY_MS) this.liveDepartures.delete(hex);
   }
 
   /** Landerichtung wieder automatisch wählen (nach Wind und, bei LIVE, nach dem echten Verkehr) */
@@ -578,6 +646,11 @@ export class GameEngine {
   }
 
   selectAircraft(id: string | null): void {
+    // WATCH: echten Flieger nur auswählen (Details in der Seitenleiste)
+    if (this.watching) {
+      this.state = { ...this.state, selectedId: id && this.liveFrame.some((ac) => liveId(ac.hex) === id) ? id : null };
+      return;
+    }
     // Klick auf einen echten Anflug übernimmt ihn
     if (id && !this.manager.get(id)) this.takeOver(id);
     this.state = { ...this.state, selectedId: id && this.manager.get(id) ? id : null };
@@ -636,7 +709,7 @@ export class GameEngine {
       rangeNM: data.rangeNM,
       trailLength: data.trailLength,
       sweepEnabled: data.sweepEnabled,
-      timeScale: data.trafficMode === 'live' ? 1 : data.timeScale ?? 1,
+      timeScale: data.trafficMode && data.trafficMode !== 'sim' ? 1 : data.timeScale ?? 1,
       display: { ...DEFAULT_DISPLAY, ...data.display },
       activeRunwayIds: data.activeRunwayIds ?? [],
       runwaySource: data.runwaySource ?? 'default',

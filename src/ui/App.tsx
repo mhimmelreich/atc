@@ -16,6 +16,7 @@ import { ContextMenu, type ContextMenuState } from './ContextMenu';
 import { RadioLog } from './RadioLog';
 import { HowTo } from './HowTo';
 import { StationPanel } from './StationPanel';
+import { WatchPanel } from './WatchPanel';
 import { RadioVoice } from '@/services/RadioVoice';
 import { loadTelephony } from '@/game/Telephony';
 import { fetchLiveTraffic, LIVE_POLL_MS } from '@/services/LiveTrafficService';
@@ -43,7 +44,8 @@ const RUNWAY_SOURCES: Record<RunwaySource, { label: string; title: string }> = {
 };
 const TRAFFIC_OPTIONS: Array<{ id: TrafficMode; label: string; title: string }> = [
   { id: 'sim',  label: 'SIM',  title: 'Erfundener Verkehr zum Lotsen' },
-  { id: 'live', label: 'LIVE', title: 'Echte Flieger von adsb.lol' },
+  { id: 'live', label: 'LIVE', title: 'Echte Flieger von adsb.lol, Anflüge zum Lotsen übernehmen' },
+  { id: 'watch', label: 'WATCH', title: 'Zuschauen: nur echter Verkehr in Echtzeit, ohne Lotsen und Punkte' },
 ];
 
 interface RadioPrefs {
@@ -79,8 +81,9 @@ export function App() {
     pendingCmdTypes: {}, display: { ...DEFAULT_DISPLAY },
     activeRunwayIds: [], radio: [],
     trafficMode: 'sim', live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {},
-    weather: null, runwaySource: 'default',
+    weather: null, runwaySource: 'default', watch: [], watchRoles: {},
   });
+  const watching = gameState.trafficMode === 'watch';
   const [airport, setAirport] = useState<Airport | null>(null);
   const [navPoints, setNavPoints] = useState<Waypoint[]>([]);
   const [stars, setStars] = useState<STAR[]>([]);
@@ -191,7 +194,7 @@ export function App() {
 
   // ── Echter Verkehr: alle 5 s abfragen, solange LIVE aktiv und der Tab sichtbar ist ──
   useEffect(() => {
-    if (gameState.trafficMode !== 'live' || !airport) return;
+    if (gameState.trafficMode === 'sim' || !airport) return;
     let stopped = false;
     let busy = false;
     const poll = async () => {
@@ -333,7 +336,7 @@ export function App() {
       <div>
         <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
           <span>TRAFFIC</span>
-          {gameState.trafficMode === 'live' && (
+          {gameState.trafficMode !== 'sim' && (
             <span style={{ color: gameState.live.error ? '#ffaa00' : '#00ff88' }}>
               {gameState.live.updatedAt === null
                 ? (gameState.live.error ? 'keine Daten' : 'lädt…')
@@ -469,6 +472,12 @@ export function App() {
         />
       </div>
 
+      {watching ? (
+        <WatchPanel
+          aircraft={gameState.watch} roles={gameState.watchRoles} airport={airport}
+          selectedId={gameState.selectedId} onSelect={handleSelectAircraft}
+        />
+      ) : (<>
       {/* Alerts */}
       <AlertBanner conflicts={gameState.conflicts} aircraft={gameState.aircraft} names={gameState.liveNames} />
 
@@ -494,6 +503,7 @@ export function App() {
         onToggleSweep={() => engineRef.current?.setSweep(!gameState.sweepEnabled)}
         onTimeScale={(s) => engineRef.current?.setTimeScale(s)}
       />
+      </>)}
     </div>
   );
 
@@ -503,10 +513,12 @@ export function App() {
 
       {isMobile && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px', background: '#050e05', borderBottom: '1px solid #0a2010', flexShrink: 0 }}>
-          <span style={{ color: '#00cc66', fontSize: 13, fontWeight: 'bold' }}>ATC APPROACH</span>
+          <span style={{ color: '#00cc66', fontSize: 13, fontWeight: 'bold' }}>{watching ? 'ATC WATCH' : 'ATC APPROACH'}</span>
           <div style={{ display: 'flex', gap: 10, fontSize: 11, color: '#446644' }}>
-            <span style={{ color: gameState.score >= 0 ? '#00ff88' : '#ff3333' }}>{gameState.score}</span>
-            <span>{gameState.landings} LND</span>
+            {watching ? <span style={{ color: '#00ff88' }}>{gameState.watch.length} AC</span> : <>
+              <span style={{ color: gameState.score >= 0 ? '#00ff88' : '#ff3333' }}>{gameState.score}</span>
+              <span>{gameState.landings} LND</span>
+            </>}
             <button onClick={() => setShowHelp(true)} title="HowTo" style={HELP_BUTTON}>?</button>
             <button onClick={() => setBottomOpen((o) => !o)} style={{ background: bottomOpen ? '#0a2a18' : 'transparent', border: '1px solid #1a4428', color: '#00cc66', padding: '2px 8px', fontFamily: '"Courier New", monospace', fontSize: 11, cursor: 'pointer', borderRadius: 2 }}>
               {bottomOpen ? '▲ RADAR' : '▼ CTRL'}

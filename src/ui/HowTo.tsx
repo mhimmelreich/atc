@@ -86,6 +86,9 @@ function Overview() {
       <P><B>Übernehmen:</B> Klick auf den hellblauen Flieger oder auf seinen Anruf im Funk-Log. Er wird zu deinem Flieger und hört ab jetzt auf dich: Er folgt der nächstgelegenen STAR deiner aktiven Bahn; ist er schon auf dem Endanflug, behält er seine ILS-Freigabe. Sein echtes Gegenstück verschwindet vom Radar. Hat er sich noch nicht gemeldet, ruft er gleich an.</P>
       <P>Punkte gibt es nur für Landungen übernommener Flieger. Zu den echten Fliegern hältst du denselben Abstand wie zu deinen eigenen; nach der ILS-Freigabe zählt das innerhalb von 15 NM um den Platz nicht mehr, dort ist der echte Tower zuständig. LIVE läuft in Echtzeit, ohne Zeitraffer.</P>
       <P>Die Landerichtung folgt bei LIVE den echten Landungen: Sind in 10 Minuten mindestens zwei echte Flieger in der anderen Richtung gelandet und keiner in deiner, stellt das Spiel um.</P>
+      <H>ZUSCHAUEN (WATCH)</H>
+      <P>Mit <B>TRAFFIC WATCH</B> schaust du nur zu: Das Radar (und die 3D-Ansicht) zeigt den echten Verkehr rund um den Platz in Echtzeit, ohne erfundene Flieger, ohne Anrufe, ohne Lotsen und ohne Punkte. Die Positionen kommen etwa alle 5 Sekunden von adsb.lol und werden dazwischen mit Kurs, Geschwindigkeit und Sinkrate weitergerechnet.</P>
+      <P><span style={{ color: '#78d7ff' }}>Hellblau</span> sind Anflüge auf den Platz (mit Startplatz), <span style={{ color: '#ffbe5a' }}>orange</span> Abflüge (mit Ziel), grau der übrige Verkehr. Ein Klick auf einen Flieger, auf ihn in der Liste oder auf seine Zeile im Log zeigt seine Daten: Typ, Kennzeichen, Route, Höhe und im Autopiloten gewählte Höhe, Sinkrate, Geschwindigkeit, Kurs, Squawk. Das Log meldet jeden Endanflug mit Bahn und jeden Start.</P>
       <H>WETTER UND LANDERICHTUNG</H>
       <P>Das Spiel holt alle 10 Minuten das aktuelle Wetter des Platzes (METAR). Daraus kommen das QNH im Funk (in den USA „altimeter“ in inHg) und der Bodenwind in der Landefreigabe.</P>
       <P>Gelandet wird gegen den Wind. Steht <B>ACTIVE RWY</B> auf AUTO, wählt das Spiel die Richtung mit dem meisten Gegenwind (AUTO · WIND), bei LIVE die der echten Landungen (AUTO · LIVE). Ein Wechsel steht im Funk-Log. Schaltest du von Hand um, bleibt es dabei (MANUELL), bis du auf MANUELL klickst.</P>
@@ -252,7 +255,7 @@ function Controls() {
         ['Karte verschieben', 'Ziehen mit der Maus oder dem Finger'],
         ['Zoomen', 'Mausrad, RANGE oder zwei Finger auseinander/zusammen'],
         ['3D-Ansicht', '3D unten rechts schaltet um. Ziehen verschiebt, rechte Maustaste oder Shift+Ziehen dreht und neigt, Mausrad zoomt. Am Handy: zwei Finger drehen, zoomen und (gemeinsam hoch/runter) neigen. Die Knöpfe unten rechts tun dasselbe, ⌂ setzt zurück. Höhen sind vierfach überhöht.'],
-        ['Verkehr', 'TRAFFIC: SIM ist erfundener Verkehr zum Lotsen, LIVE zeigt die echten Flieger (Beschriftung unter FL200, Anflüge hellblau). Die Anzeige nennt alle Flieger (AC) und die Anflüge (IN).'],
+        ['Verkehr', 'TRAFFIC: SIM ist erfundener Verkehr zum Lotsen, LIVE zeigt die echten Flieger (Beschriftung unter FL200, Anflüge hellblau), WATCH nur zum Zuschauen in Echtzeit. Die Anzeige nennt alle Flieger (AC) und die Anflüge (IN).'],
         ['Echten Anflug übernehmen', 'LIVE: Klick oder Rechtsklick auf einen hellblauen Flieger, oder Klick auf seinen Anruf im Funk-Log'],
         ['Landerichtung', 'ACTIVE RWY: AUTO bleibt wie in echt bei der Vorzugsrichtung (West, z. B. Frankfurt 25), bis der Rückenwind mehr als 5 kt beträgt; bei LIVE gilt die Richtung der echten Landungen. Bahnen der Gegenrichtung schalten von Hand um (MANUELL), ein Klick auf MANUELL wieder auf AUTO.'],
         ['Funkstellen und Wetter', 'FREQ / WX: Approach und Turm mit Frequenz, Wind und QNH. Die Maus über WX zeigt das METAR.'],
