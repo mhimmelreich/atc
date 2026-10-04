@@ -25,6 +25,14 @@ const COLOR = { in: '#78d7ff', out: '#ffbe5a', other: '#aabeb4' };
 const roleColor = (r?: LiveInbound) => (r?.out ? COLOR.out : r ? COLOR.in : COLOR.other);
 const roleText = (r?: LiveInbound) => (r?.out ? `→ ${r.dest ?? '?'}` : r ? `${r.guess ? '?' : r.origin ?? '?'} →` : '');
 const fl = (ft: number | null) => (ft === null ? '---' : ft < 6000 ? `${Math.round(ft / 100) * 100} ft` : `FL${Math.round(ft / 100).toString().padStart(3, '0')}`);
+/** Wahrscheinliche STAR (aus der Flugbahn geschätzt, daher "≈") */
+const starText = (g?: LiveInbound['star']) => {
+  if (!g) return 'unbekannt';
+  const rwy = g.runways.length ? ` (${g.runways.join('/')})` : '';
+  if (g.status === 'vectors') return `Vektoren, zuvor ≈ ${g.name}`;
+  if (g.status === 'entry') return `≈ ${g.name}${rwy}, fliegt auf ${g.next} zu`;
+  return `≈ ${g.name}${rwy}${g.next ? `, nächster Punkt ${g.next}` : ''}`;
+};
 const vsArrow = (vs: number | null) => ((vs ?? 0) > 300 ? '↑' : (vs ?? 0) < -300 ? '↓' : '→');
 
 /** Treffer für die Suche: Rufzeichen, Kennzeichen, Typ, Route oder hex */
@@ -100,6 +108,7 @@ function Details({ ac, role, airport, spectator }: { ac: LiveAircraft; role?: Li
   const rows: Array<[string, string]> = [
     ['TYPE', [ac.type, ac.reg].filter(Boolean).join(' · ') || '—'],
     ['ROUTE', ac.route?.replace(/-/g, ' → ') ?? '—'],
+    ...(role && !role.out ? [['STAR', starText(role.star)] as [string, string]] : []),
     ['ALT', `${fl(ac.altFt)}${ac.selAltFt !== undefined ? `  (SEL ${fl(ac.selAltFt)})` : ''}`],
     ['V/S', ac.vs === null ? '—' : `${ac.vs > 0 ? '+' : ''}${Math.round(ac.vs / 100) * 100} ft/min`],
     ['GS', ac.gs === null ? '—' : `${Math.round(ac.gs)} kt`],

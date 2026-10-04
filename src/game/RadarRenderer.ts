@@ -99,7 +99,7 @@ export interface RenderOptions {
   /** Echte Flieger (LIVE), nicht gelotst; inbound: Anflüge zum Platz, die man übernehmen kann (hex → Info) */
   live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]>; inbound: Map<string, LiveInbound> };
   /** WATCH: vergangene Flugbahn des gewählten Fliegers */
-  track?: { hex: string; points: Array<{ lat: number; lng: number; altFt: number | null }> } | null;
+  track?: { hex: string; points: Array<{ lat: number; lng: number; altFt: number | null; ts?: number }> } | null;
   /** WATCH: Standort des Zuschauers (GPS) */
   spectator?: { lat: number; lng: number } | null;
 }

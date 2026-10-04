@@ -35,6 +35,8 @@ export interface LiveInbound {
   /** WATCH: Abflug vom gewählten Platz, mit Zielplatz */
   out?: boolean;
   dest?: string;
+  /** WATCH: wahrscheinliche STAR aus der Flugbahn (ADS-B sendet sie nicht) */
+  star?: import('@/game/StarMatch').StarGuess;
 }
 
 export interface LiveStatus {

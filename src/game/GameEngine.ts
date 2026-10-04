@@ -10,12 +10,17 @@ import { inbound, callsIn, liveToAircraft, liveId, hexOf, landingRunway, type In
 import { RadarRenderer, DEFAULT_DISPLAY, type DisplayOptions, type RenderOptions } from './RadarRenderer';
 import { Scene3DRenderer, DEFAULT_CAMERA, PITCH_MIN, PITCH_MAX, type Camera3D } from './Scene3DRenderer';
 import { headingDiff } from '@/utils/aviation';
+import { guessStar, type StarGuess } from './StarMatch';
 import { pad3 } from './Speech';
 import { destinationPoint, distanceNM } from '@/utils/geo';
 import { SCORE_LANDING, SCORE_GOAROUND, SCORE_SEPARATION_VIOLATION, SCORE_COLLISION } from './constants';
 
 const RADIO_LOG_SIZE = 50;
 const LIVE_TRAIL_MAX = 20;
+// WATCH: längere Spur (etwa 12 Minuten), damit sich die STAR erkennen lässt
+const WATCH_TRAIL_MAX = 150;
+// WATCH: für den STAR-Vergleich nur der Teil der Flugbahn in Platznähe
+const STAR_MATCH_NM = 120;
 const LIVE_EXTRAPOLATE_MAX_S = 30;
 // Landerichtung aus dem Wind: wie in echt bleibt die Vorzugsrichtung, bis der Rückenwind (mit Böen) mehr als 5 kt beträgt
 const TAILWIND_MAX_KT = 5;
@@ -143,6 +148,7 @@ export class GameEngine {
   private liveFrame: LiveAircraft[] = [];            // echte Flieger im letzten Bild (für Klicks)
   private liveFinals = new Map<string, { heading: number; at: number }>(); // hex → Bahnkurs, zuletzt im Endanflug gesehen
   private track: RenderOptions['track'] = null;                            // WATCH: Flugbahn des gewählten Fliegers
+  private starGuesses = new Map<string, StarGuess>();                       // WATCH: hex → wahrscheinliche STAR
   private liveDepartures = new Map<string, number>();                       // WATCH: hex → zuletzt beim Start gesehen
   private liveOutbound = new Map<string, string | undefined>();              // WATCH: hex → Zielplatz der Abflüge
 
@@ -245,7 +251,7 @@ export class GameEngine {
       if (ac.ground) continue;
       const trail = this.liveTrails.get(ac.hex) ?? [];
       const last = trail[trail.length - 1];
-      trails.set(ac.hex, !last || last.ts < ac.ts ? [...trail, { lat: ac.lat, lng: ac.lng, ts: ac.ts }].slice(-LIVE_TRAIL_MAX) : trail);
+      trails.set(ac.hex, !last || last.ts < ac.ts ? [...trail, { lat: ac.lat, lng: ac.lng, ts: ac.ts }].slice(-(this.watching ? WATCH_TRAIL_MAX : LIVE_TRAIL_MAX)) : trail);
     }
     this.liveTrails = trails;
     this.detectRunwayInUse(list);
@@ -266,6 +272,7 @@ export class GameEngine {
       const ctx = this.takeoverContext(airport);
       // WATCH: niemand ruft an, es wird nur zugeschaut
       this.manager.setAnnouncements(this.watching ? [] : calls.map(({ ac }) => liveToAircraft(ac, ctx, this.liveInbound.get(ac.hex)?.origin)));
+      if (this.watching) this.updateStarGuesses(list);
       // WATCH: Abflüge laut Route (gewählter Platz vor dem Ziel)
       this.liveOutbound.clear();
       if (this.watching) {
@@ -304,6 +311,7 @@ export class GameEngine {
     this.liveTrails.clear();
     this.liveInbound.clear();
     this.liveOutbound.clear();
+    this.starGuesses.clear();
     this.takenOver.clear();
     this.liveFrame = [];
     this.state = { ...this.state, live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {}, watch: [], watchRoles: {} };
@@ -337,7 +345,7 @@ export class GameEngine {
   private inboundView(): Map<string, LiveInbound> {
     const view = new Map<string, LiveInbound>();
     for (const [hex, inb] of this.liveInbound) {
-      view.set(hex, { origin: inb.origin, guess: inb.kind === 'guess', called: !!this.manager.announcedAs(liveId(hex)) });
+      view.set(hex, { origin: inb.origin, guess: inb.kind === 'guess', called: !!this.manager.announcedAs(liveId(hex)), star: this.starGuesses.get(hex) });
     }
     for (const [hex, dest] of this.liveOutbound) view.set(hex, { guess: false, called: false, out: true, dest });
     return view;
@@ -486,7 +494,25 @@ export class GameEngine {
 
   /** WATCH: Standort des Zuschauers (GPS) setzen oder löschen (dann gilt der gewählte Platz) */
   /** WATCH: vergangene Flugbahn des gewählten Fliegers (null: keine) */
-  setTrack(track: RenderOptions['track']): void { this.track = track ?? null; }
+  setTrack(track: RenderOptions['track']): void {
+    this.track = track ?? null;
+    if (this.watching) this.updateStarGuesses(this.liveTraffic);
+  }
+
+  /** WATCH: wahrscheinliche STAR jedes Anflugs aus seiner Flugbahn (beim gewählten die ganze, sonst die Spur) */
+  private updateStarGuesses(list: LiveAircraft[]): void {
+    this.starGuesses.clear();
+    const airport = this.airport;
+    if (!airport || this.stars.length === 0) return;
+    for (const ac of list) {
+      if (!this.liveInbound.has(ac.hex)) continue;
+      const history: Array<{ lat: number; lng: number; altFt?: number | null; ts?: number }> =
+        this.track?.hex === ac.hex ? this.track.points : this.liveTrails.get(ac.hex) ?? [];
+      const near = history.filter((p) => distanceNM(p.lat, p.lng, airport.lat, airport.lng) < STAR_MATCH_NM);
+      const guess = guessStar([...near, { lat: ac.lat, lng: ac.lng, ts: ac.ts }], ac.track, this.stars, this.state.activeRunwayIds);
+      if (guess) this.starGuesses.set(ac.hex, guess);
+    }
+  }
 
   /** Blick auf einen Punkt richten (z. B. Suchtreffer) */
   centerOn(lat: number, lng: number): void { this.viewLat = lat; this.viewLng = lng; }
