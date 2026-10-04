@@ -304,8 +304,8 @@ export class AircraftManager {
         break;
       }
       case 'land':
-        // Landefreigabe nur für einen Flieger mit zugewiesenem ILS
-        applied = ac.clearedILS && !!ac.assignedRunway;
+        // Landefreigabe gibt nur der Turm: Flieger mit ILS-Freigabe auf der Turmfrequenz
+        applied = ac.clearedILS && !!ac.assignedRunway && !!ac.tower;
         if (applied) updated = { ...updated, clearedToLand: true };
         break;
       case 'tower':
