@@ -16,8 +16,9 @@ app.set('trust proxy', 1);
 
 app.use(express.json());
 
-// Sprachausgabe vor dem allgemeinen Limit einhängen: sie hat ein eigenes, höheres
+// Sprachausgabe und Live-Verkehr vor dem allgemeinen Limit einhängen: sie haben eigene, höhere
 app.use('/api/tts', ttsRouter);
+app.use('/api/traffic', trafficRouter);
 
 // Rate limiting
 const limiter = rateLimit({
@@ -39,7 +40,6 @@ app.use((_req, res, next) => {
 });
 
 app.use('/api/airport', airportRouter);
-app.use('/api/traffic', trafficRouter);
 app.use('/api/navdata', navdataRouter);
 app.use('/api/opendata', opendataRouter);
 

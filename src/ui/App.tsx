@@ -17,6 +17,8 @@ import { RadioLog } from './RadioLog';
 import { HowTo } from './HowTo';
 import { RadioVoice } from '@/services/RadioVoice';
 import { loadTelephony } from '@/game/Telephony';
+import { fetchLiveTraffic, LIVE_POLL_MS } from '@/services/LiveTrafficService';
+import type { TrafficMode } from '@/types/live';
 
 const SIDEBAR_W = 288;
 const MOBILE_BREAKPOINT = 700;
@@ -31,6 +33,10 @@ const SOURCE_NAMES: Record<AirportSource, string> = {
   navdata: 'Navigraph', open: 'OurAirports', generic: 'generisch',
 };
 const RADIO_STORAGE = 'atc-radio';
+const TRAFFIC_OPTIONS: Array<{ id: TrafficMode; label: string; title: string }> = [
+  { id: 'sim',  label: 'SIM',  title: 'Erfundener Verkehr zum Lotsen' },
+  { id: 'live', label: 'LIVE', title: 'Echte Flieger von adsb.lol' },
+];
 
 interface RadioPrefs {
   log: boolean;
@@ -64,6 +70,7 @@ export function App() {
     paused: false, timeScale: 1, sweepEnabled: false, rangeNM: 80, trailLength: 6,
     pendingCmdTypes: {}, display: { ...DEFAULT_DISPLAY },
     activeRunwayIds: [], radio: [],
+    trafficMode: 'sim', live: { count: 0, updatedAt: null, error: false },
   });
   const [airport, setAirport] = useState<Airport | null>(null);
   const [navPoints, setNavPoints] = useState<Waypoint[]>([]);
@@ -164,6 +171,28 @@ export function App() {
     });
   }, [selectedIcao, sourcePref, voice]);
 
+  // ── Echter Verkehr: alle 5 s abfragen, solange LIVE aktiv und der Tab sichtbar ist ──
+  useEffect(() => {
+    if (gameState.trafficMode !== 'live' || !airport) return;
+    let stopped = false;
+    let busy = false;
+    const poll = async () => {
+      if (busy || document.hidden) return;
+      busy = true;
+      try {
+        const list = await fetchLiveTraffic(airport.lat, airport.lng);
+        if (!stopped) engineRef.current?.setLiveTraffic(list);
+      } catch {
+        if (!stopped) engineRef.current?.setLiveError();
+      } finally {
+        busy = false;
+      }
+    };
+    void poll();
+    const id = setInterval(poll, LIVE_POLL_MS);
+    return () => { stopped = true; clearInterval(id); };
+  }, [gameState.trafficMode, airport]);
+
   const handleCommand = useCallback((id: string, cmd: ATCCommand) => {
     engineRef.current?.applyCommand(id, cmd);
   }, []);
@@ -255,6 +284,42 @@ export function App() {
                 background: sourcePref === o.id ? '#0a3020' : 'transparent',
                 border: `1px solid ${sourcePref === o.id ? '#00cc66' : '#1a4428'}`,
                 color: sourcePref === o.id ? '#00ff88' : '#446644',
+                fontFamily: '"Courier New", monospace',
+                fontSize: 11,
+                padding: '4px 2px',
+                cursor: 'pointer',
+                borderRadius: 2,
+              }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Verkehr: SIM oder LIVE */}
+      <div>
+        <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
+          <span>TRAFFIC</span>
+          {gameState.trafficMode === 'live' && (
+            <span style={{ color: gameState.live.error ? '#ffaa00' : '#00ff88' }}>
+              {gameState.live.updatedAt === null
+                ? (gameState.live.error ? 'keine Daten' : 'lädt…')
+                : `${gameState.live.count} AC · ${Math.round((Date.now() - gameState.live.updatedAt) / 1000)} s`}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 3 }}>
+          {TRAFFIC_OPTIONS.map((o) => (
+            <button
+              key={o.id}
+              title={o.title}
+              onClick={() => engineRef.current?.setTrafficMode(o.id)}
+              style={{
+                flex: 1,
+                background: gameState.trafficMode === o.id ? '#0a3020' : 'transparent',
+                border: `1px solid ${gameState.trafficMode === o.id ? '#00cc66' : '#1a4428'}`,
+                color: gameState.trafficMode === o.id ? '#00ff88' : '#446644',
                 fontFamily: '"Courier New", monospace',
                 fontSize: 11,
                 padding: '4px 2px',

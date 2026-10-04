@@ -1,5 +1,6 @@
 // filepath: src/game/RadarRenderer.ts
-import type { Aircraft, ConflictPair } from '@/types/aircraft';
+import type { Aircraft, ConflictPair, TrailPoint } from '@/types/aircraft';
+import type { LiveAircraft } from '@/types/live';
 import { AIRCRAFT_TYPES } from './constants';
 import type { Airport, AirportLayer, OsmWay } from '@/types/airport';
 import type { Waypoint, STAR } from '@/types/navdata';
@@ -48,7 +49,14 @@ const C = {
   AC_WHITE:         '#cccccc',
   CONFLICT:         '#ff3333',
   WARNING:          '#ffaa00',
+
+  LIVE:             'rgba(170,190,180,0.85)',
+  LIVE_LABEL:       'rgba(150,170,160,0.85)',
+  LIVE_TRAIL:       'rgba(150,170,160,',
 };
+
+// Echte Flieger: Beschriftung nur unterhalb dieser Höhe (darüber Überflieger ohne Bezug zum Platz)
+const LIVE_LABEL_MAX_FT = 20000;
 
 export interface DisplayOptions {
   labels: boolean;
@@ -81,6 +89,8 @@ export interface RenderOptions {
   stars: STAR[];
   display: DisplayOptions;
   activeRunwayIds: string[];
+  /** Echte Flieger (LIVE), nicht gelotst */
+  live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]> };
 }
 
 export class RadarRenderer {
@@ -186,6 +196,8 @@ export class RadarRenderer {
       if (previewAc) this.drawAltitudeReachCircle(previewAc, opts.previewAltitude.targetAlt, ll2c);
     }
 
+    if (opts.live) this.drawLive(opts.live, ll2c, W, H, opts.trailLength, opts.display.labels);
+
     for (const ac of opts.aircraft) this.drawTrail(ac, ll2c, opts.trailLength);
     for (const ac of opts.aircraft) {
       const selected = ac.id === opts.selectedId;
@@ -206,7 +218,58 @@ export class RadarRenderer {
     ctx.textAlign = 'left';
     ctx.fillText(`${opts.rangeNM.toFixed(0)} NM`, 8, 18);
 
+    // Quellenhinweis für die Live-Daten (ODbL)
+    if (opts.live) {
+      ctx.fillStyle = 'rgba(150,170,160,0.6)';
+      ctx.fillText('Traffic: adsb.lol (ODbL)', 8, H - 8);
+    }
+
     ctx.restore();
+  }
+
+  // ── Echte Flieger (LIVE) ────────────────────────────────────────────────────
+  private drawLive(
+    live: NonNullable<RenderOptions['live']>,
+    ll2c: (lat: number, lng: number) => { x: number; y: number },
+    W: number, H: number,
+    trailLength: number,
+    showLabels: boolean,
+  ): void {
+    const { ctx } = this;
+    for (const ac of live.aircraft) {
+      const p = ll2c(ac.lat, ac.lng);
+      if (p.x < -40 || p.x > W + 40 || p.y < -40 || p.y > H + 40) continue;
+
+      const trail = (live.trails.get(ac.hex) ?? []).slice(-trailLength);
+      trail.forEach((t, i) => {
+        const q = ll2c(t.lat, t.lng);
+        ctx.fillStyle = `${C.LIVE_TRAIL}${((i + 1) / trail.length) * 0.35})`;
+        ctx.fillRect(q.x - 1, q.y - 1, 2, 2);
+      });
+
+      // Radarziel als Quadrat mit Vektor für eine Minute Flugweg
+      ctx.strokeStyle = C.LIVE;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(p.x - 3, p.y - 3, 6, 6);
+      if (ac.gs !== null && ac.track !== null) {
+        const ahead = destinationPoint(ac.lat, ac.lng, ac.track, ac.gs / 60);
+        const q = ll2c(ahead.lat, ahead.lng);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(q.x, q.y);
+        ctx.stroke();
+      }
+
+      if (showLabels && ac.altFt !== null && ac.altFt < LIVE_LABEL_MAX_FT) {
+        const fl = Math.round(ac.altFt / 100).toString().padStart(3, '0');
+        const vs = (ac.vs ?? 0) > 300 ? '↑' : (ac.vs ?? 0) < -300 ? '↓' : '→';
+        ctx.fillStyle = C.LIVE_LABEL;
+        ctx.font = '10px "Courier New"';
+        ctx.textAlign = 'left';
+        ctx.fillText(ac.callsign, p.x + 8, p.y - 3);
+        ctx.fillText(`FL${fl} ${vs} ${ac.gs !== null ? Math.round(ac.gs) : ''}`, p.x + 8, p.y + 8);
+      }
+    }
   }
 
   // ── Coordinate factory ────────────────────────────────────────────────────

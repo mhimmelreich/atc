@@ -76,6 +76,7 @@ function Overview() {
       <H>DEINE ROLLE IM SPIEL</H>
       <P>Du bist <B>Approach und Tower</B> zugleich. Die Flieger kommen auf ihrer STAR in deinen Bereich und melden sich bei dir. Deine Aufgabe: sie sicher gestaffelt hintereinander auf den Endanflug bringen, das ILS freigeben und die Landung freigeben.</P>
       <P>Gut gemacht ist es, wenn keiner durchstarten muss und sich nie zwei Flieger zu nahe kommen.</P>
+      <P>Mit <B>TRAFFIC LIVE</B> zeigt das Radar statt des erfundenen Verkehrs die echten Flieger rund um den Platz, grau und mit Spur.</P>
     </>
   );
 }
@@ -223,6 +224,7 @@ function Controls() {
         ['Kontextmenü', 'Rechtsklick auf den Flieger (am Handy lange tippen)'],
         ['Karte verschieben', 'Ziehen mit der Maus oder dem Finger'],
         ['Zoomen', 'Mausrad oder RANGE'],
+        ['Verkehr', 'TRAFFIC: SIM ist erfundener Verkehr zum Lotsen, LIVE zeigt die echten Flieger (Beschriftung unter FL200)'],
         ['Landerichtung', 'ACTIVE RWY: Bahnen der Gegenrichtung schalten die Betriebsrichtung um'],
         ['Zeitraffer', 'SESSION 1x bis 8x, Pause mit ⏸'],
         ['Anzeige', 'Unten LABELS, ILS, NAVAID, STARs'],
@@ -240,6 +242,7 @@ function Credits() {
       <P>Flughäfen, Bahnen und Funkfeuer: {link('https://ourairports.com/data/', 'OurAirports')} (gemeinfrei).</P>
       <P>Anflugverfahren (STARs) und ILS: Navigraph AIRAC, nur zur privaten Nutzung freigeschaltet.</P>
       <P>Funknamen der Airlines: {link('https://openflights.org/data.php', 'OpenFlights')}, Open Database License (ODbL).</P>
+      <P>Echter Verkehr (LIVE): {link('https://adsb.lol', 'adsb.lol')}, Open Database License (ODbL).</P>
       <H>STIMMEN</H>
       <P>Sprachausgabe mit {link('https://github.com/OHF-Voice/piper1-gpl', 'Piper')} (GPL-3.0), als eigener Dienst auf dem Server.</P>
       <P>Lotse: Stimme „joe“ (CC0). Piloten: Stimmen aus {link('https://www.openslr.org/141/', 'LibriTTS-R')} (Koizumi et al., CC BY 4.0) und dem {link('https://datashare.ed.ac.uk/handle/10283/3443', 'CSTR VCTK Corpus')} (University of Edinburgh, CC BY 4.0).</P>

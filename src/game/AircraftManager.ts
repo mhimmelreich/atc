@@ -56,6 +56,8 @@ export class AircraftManager {
   private simTime = 0;
   private callIns = new Map<string, number>(); // aircraftId → Simulationszeit des Erstanrufs
   private lastCallAt = -Infinity;
+  /** Im LIVE-Betrieb entsteht kein erfundener Verkehr */
+  private spawning = true;
 
   constructor() {
     this.nextSpawnIn = this.randomSpawnInterval();
@@ -74,14 +76,22 @@ export class AircraftManager {
     this.spawnStars = stars;
     this.radio = radioContext(airport, stars);
     // Neuer Platz, neuer Verkehr: Flieger des alten Platzes nicht weiterfliegen lassen
-    this.aircraft.clear();
-    this.pendingCommands = [];
-    this.activePairs.clear();
-    this.callIns.clear();
+    this.clearTraffic();
   }
 
   setSpawnStars(stars: STAR[]): void {
     this.spawnStars = stars;
+  }
+
+  setSpawning(enabled: boolean): void {
+    this.spawning = enabled;
+  }
+
+  clearTraffic(): void {
+    this.aircraft.clear();
+    this.pendingCommands = [];
+    this.activePairs.clear();
+    this.callIns.clear();
   }
 
   on(handler: EventHandler): void {
@@ -216,7 +226,7 @@ export class AircraftManager {
 
     // Spawn timer
     this.nextSpawnIn -= dt;
-    if (this.nextSpawnIn <= 0 && this.aircraft.size < MAX_AIRCRAFT) {
+    if (this.spawning && this.nextSpawnIn <= 0 && this.aircraft.size < MAX_AIRCRAFT) {
       this.nextSpawnIn = this.spawnAircraft() ? this.randomSpawnInterval() : SPAWN_RETRY_S;
     }
 
