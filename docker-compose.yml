@@ -40,6 +40,29 @@ services:
       PORT: 3001
       HOST: 0.0.0.0
       TZ: Europe/Berlin
+      NAVDATA_DB: /app/data/navdata/little_navmap_navigraph.sqlite
+      # Privater Schlüssel für /api/navdata (in .env setzen, nicht committen)
+      NAVDATA_KEY: ${NAVDATA_KEY:-}
+      TTS_URL: http://atc-tts:5002
+    volumes:
+      # Navigraph-AIRAC-DB (lizenziert, nicht im Repo) – siehe scripts/extract-navdata.sh
+      - ./data/navdata:/app/data/navdata:ro
+      # OurAirports-CSVs (frei, vom Server geladen und gecacht)
+      - ./data/opendata:/app/data/opendata
+    networks:
+      - proxy
+    depends_on:
+      - atc-tts
+
+  # Sprachausgabe für den Funkverkehr (Piper), nur intern über atc-api erreichbar
+  atc-tts:
+    build:
+      context: .
+      dockerfile: Dockerfile.tts
+    container_name: atc-tts
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Berlin
     networks:
       - proxy
 

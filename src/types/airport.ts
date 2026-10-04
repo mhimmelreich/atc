@@ -41,9 +41,23 @@ export interface AirportLayer {
   holdingPoints: Array<{ lat: number; lng: number; name?: string }>;
 }
 
+/** Funkstelle des Platzes laut Navigraph bzw. OurAirports */
+export interface Station {
+  /** Rufname, z. B. "Langen Radar"; fehlt er in den Daten, bildet das Spiel ihn aus Stadt und Art */
+  name?: string;
+  /** Art der Stelle: "Approach", "Arrival", "Director" oder "Tower" */
+  role: string;
+  /** Frequenz in MHz, z. B. 118.505 */
+  mhz: number;
+}
+
 export interface Airport {
   icao: string;
   name: string;
+  /** Stadt (OurAirports), für den Rufnamen der Anflugkontrolle */
+  city?: string;
+  /** Anflugkontrolle und Turm */
+  stations?: { approach?: Station; tower?: Station };
   lat: number;
   lng: number;
   elevationFt: number;

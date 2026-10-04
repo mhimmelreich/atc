@@ -44,6 +44,27 @@ export const AIRCRAFT_TYPES: Record<string, { approachKts: number; cruiseKts: nu
   CRJ9: { approachKts: 125, cruiseKts: 250, wake: 'M' },
 };
 
+export type TypeData = (typeof AIRCRAFT_TYPES)[string];
+
+/**
+ * Leistungsdaten zu einem ICAO-Mustercode. Echte Flieger (LIVE) bringen beliebige Codes mit:
+ * bekannte direkt, sonst nach Familie (A20N wie A320, B789 wie B77W), im Zweifel wie ein A320.
+ */
+export function typeData(type: string): TypeData {
+  return AIRCRAFT_TYPES[type] ?? AIRCRAFT_TYPES[typeFamily(type)];
+}
+
+function typeFamily(type: string): string {
+  if (/^A38\w$/.test(type)) return 'A388';
+  if (/^(A30\w|A310|A3[345]\w|B7[4678]\w|MD11|IL96|A124|A400|C17)$/.test(type)) return 'B77W';
+  if (type === 'A21N') return 'A321';
+  if (/^(B73\w|B3\dM|B3XM|B75\w)$/.test(type)) return 'B738';
+  if (/^(E1[79]\d|E2[89]\d|E75\w|E1[34]5|BCS\d|F100|RJ\w\w|B46\d)$/.test(type)) return 'E190';
+  if (/^CRJ\w$/.test(type)) return 'CRJ9';
+  if (/^(AT[4-7]\w|DH8\w|SF34|D328|ATP|F50|JS41|B190|C130)$/.test(type)) return 'DH8D';
+  return 'A320';
+}
+
 export const CALLSIGN_PREFIXES = [
   'DLH', 'EZY', 'RYR', 'BAW', 'AFL', 'UAE', 'THY', 'SWR',
   'KLM', 'IBE', 'AUA', 'SAS', 'TAP', 'VKG', 'CFG', 'TUI',

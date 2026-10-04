@@ -5,7 +5,7 @@ import type { Runway } from '@/types/airport';
 import type { STAR } from '@/types/navdata';
 import { turnToHeading, adjustAltitude, adjustSpeed, ktsToNMps, headingDiff, glideslopeAltitude, normaliseHdg } from '@/utils/aviation';
 import { destinationPoint, distanceNM, bearingBetween } from '@/utils/geo';
-import { TRAIL_LENGTH, TRAIL_INTERVAL_MS, AIRCRAFT_TYPES } from './constants';
+import { TRAIL_LENGTH, TRAIL_INTERVAL_MS, typeData } from './constants';
 
 export function createAircraft(partial: Omit<Aircraft, 'trail' | 'conflict' | 'warning'>): Aircraft {
   return { ...partial, trail: [], conflict: false, warning: false };
@@ -34,6 +34,14 @@ export function updateAircraft(
   let targetSpd = ac.targetSpeed;
   let turnDirection = ac.turnDirection;
   let starLegIndex = ac.starLegIndex ?? 0;
+  let directTo = ac.directTo;
+
+  // ── Direct-to (Wegpunkt außerhalb der STAR) ───────────────────────────────
+  if (!clearedILS && directTo) {
+    targetHdg = Math.round(bearingBetween(ac.lat, ac.lng, directTo.lat, directTo.lng));
+    // Am Punkt angekommen: aktuellen Kurs halten, Lotse übernimmt wieder
+    if (distanceNM(ac.lat, ac.lng, directTo.lat, directTo.lng) < 1.5) directTo = undefined;
+  }
 
   // ── STAR navigation (enroute, not ILS-cleared) ────────────────────────────
   if (!clearedILS && state === 'enroute' && star && starLegIndex < star.waypoints.length) {
@@ -68,7 +76,7 @@ export function updateAircraft(
       targetAlt = glideslopeAltitude(distToThr, 0);
     } else {
       // Not yet established — steer toward localizer intercept
-      const approachSpd = AIRCRAFT_TYPES[ac.type]?.approachKts ?? 140;
+      const approachSpd = typeData(ac.type).approachKts;
 
       if (Math.abs(locDeviation) < 1.5 && distToThr < 14) {
         // On centreline close enough: establish
@@ -140,7 +148,10 @@ export function updateAircraft(
   // Landing / go-around
   if (state === 'established' && runway) {
     const distToThreshold = distanceNM(newPos.lat, newPos.lng, runway.thresholdLat, runway.thresholdLng);
-    if (distToThreshold < 0.3 && altitudeFt < 500) {
+    if (distToThreshold < 1.0 && !ac.clearedToLand) {
+      // Keine Landefreigabe auf dem kurzen Endanflug → Durchstarten
+      state = 'goaround';
+    } else if (distToThreshold < 0.3 && altitudeFt < 500) {
       state = 'landed';
     } else if (distToThreshold < 1.0 && (altitudeFt > 1500 || speedKts > 180)) {
       state = 'goaround';
@@ -162,6 +173,7 @@ export function updateAircraft(
     trail,
     turnDirection,
     starLegIndex,
+    directTo,
   };
 
   return { updated, remove: state === 'landed' };

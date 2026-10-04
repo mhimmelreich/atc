@@ -1,6 +1,6 @@
 // filepath: src/ui/AircraftStrip.tsx
 import type { Aircraft } from '@/types/aircraft';
-import { AIRCRAFT_TYPES } from '@/game/constants';
+import { typeData } from '@/game/constants';
 
 const STATE_COLORS: Record<string, string> = {
   enroute: '#666',
@@ -30,7 +30,8 @@ export function AircraftStrip({ aircraft, selectedId, onSelect }: Props) {
   const active = aircraft.filter((a) => a.state !== 'landed');
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto', flex: 1 }}>
+    // Mindesthöhe: bei wenig Platz scrollt die Seitenleiste, statt die Streifen zusammenzudrücken
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto', flex: 1, minHeight: 110 }}>
       {active.length === 0 && (
         <div style={{ color: '#446644', fontSize: 11, textAlign: 'center', paddingTop: 16 }}>
           NO TRAFFIC
@@ -40,7 +41,7 @@ export function AircraftStrip({ aircraft, selectedId, onSelect }: Props) {
         const selected = ac.id === selectedId;
         const fl = Math.round(ac.altitudeFt / 100);
         const stateColor = ac.conflict ? '#ff3333' : ac.warning ? '#ffaa00' : STATE_COLORS[ac.state] ?? '#666';
-        const wake = AIRCRAFT_TYPES[ac.type]?.wake;
+        const wake = typeData(ac.type).wake;
 
         return (
           <div
@@ -72,6 +73,8 @@ export function AircraftStrip({ aircraft, selectedId, onSelect }: Props) {
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 3, fontSize: 11, color: '#888', alignItems: 'center' }}>
               <span style={{ color: '#aaa' }}>{ac.type}</span>
+              {/* Übernommener echter Flieger: Startplatz in der Farbe der echten Anflüge */}
+              {ac.origin && <span style={{ color: '#78d7ff' }} title="Startplatz (echter Flug)">{ac.origin}</span>}
               {wake === 'H' && (
                 <span style={{ color: '#000', background: '#ffaa00', padding: '0px 4px', borderRadius: 2, fontSize: 9, fontWeight: 'bold', letterSpacing: 0.5 }}>H</span>
               )}
@@ -80,7 +83,12 @@ export function AircraftStrip({ aircraft, selectedId, onSelect }: Props) {
               )}
               <span>FL{fl.toString().padStart(3, '0')}</span>
               <span>{Math.round(ac.speedKts)}kt</span>
-              {ac.assignedRunway && <span style={{ color: '#4488ff' }}>RWY {ac.assignedRunway}</span>}
+              {ac.assignedRunway && (
+                <span style={{ color: ac.clearedToLand ? '#00ff88' : '#4488ff' }}>
+                  {ac.clearedToLand ? 'LND' : 'ILS'} {ac.assignedRunway}
+                </span>
+              )}
+              {ac.tower && <span style={{ color: '#e8b84a' }} title="Beim Turm">TWR</span>}
             </div>
           </div>
         );

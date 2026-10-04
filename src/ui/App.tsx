@@ -1,9 +1,11 @@
 // filepath: src/ui/App.tsx
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { GameEngine, type GameState, type SessionData, type DisplayOptions } from '@/game/GameEngine';
+import { GameEngine, type GameState, type SessionData, type DisplayOptions, type RunwaySource } from '@/game/GameEngine';
 import { DEFAULT_DISPLAY } from '@/game/RadarRenderer';
-import { fetchAirportData, AVAILABLE_AIRPORTS } from '@/services/AirportDataService';
+import { fetchAirportData, AVAILABLE_AIRPORTS, type AirportSource, type SourcePreference } from '@/services/AirportDataService';
+import { fetchNavStatus } from '@/services/NavigraphService';
 import type { Airport } from '@/types/airport';
+import type { STAR, Waypoint } from '@/types/navdata';
 import type { ATCCommand, Aircraft } from '@/types/aircraft';
 import { RadarCanvas } from './RadarCanvas';
 import { AircraftStrip } from './AircraftStrip';
@@ -11,10 +13,60 @@ import { CommandPanel } from './CommandPanel';
 import { AlertBanner } from './AlertBanner';
 import { ScorePanel } from './ScorePanel';
 import { ContextMenu, type ContextMenuState } from './ContextMenu';
+import { RadioLog } from './RadioLog';
+import { HowTo } from './HowTo';
+import { StationPanel } from './StationPanel';
+import { RadioVoice } from '@/services/RadioVoice';
+import { loadTelephony } from '@/game/Telephony';
+import { fetchLiveTraffic, LIVE_POLL_MS } from '@/services/LiveTrafficService';
+import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
+import type { TrafficMode } from '@/types/live';
 
 const SIDEBAR_W = 288;
 const MOBILE_BREAKPOINT = 700;
 const RANGE_PRESETS = [10, 20, 40, 80, 120];
+const SOURCE_STORAGE = 'atc-data-source';
+const SOURCE_OPTIONS: Array<{ id: SourcePreference; label: string; title: string }> = [
+  { id: 'auto',    label: 'AUTO',  title: 'Beste verfügbare Quelle' },
+  { id: 'navdata', label: 'NAVIG', title: 'Navigraph AIRAC (privat)' },
+  { id: 'open',    label: 'OPEN',  title: 'OurAirports (frei)' },
+];
+const SOURCE_NAMES: Record<AirportSource, string> = {
+  navdata: 'Navigraph', open: 'OurAirports', generic: 'generisch',
+};
+const RADIO_STORAGE = 'atc-radio';
+const RUNWAY_SOURCES: Record<RunwaySource, { label: string; title: string }> = {
+  default: { label: 'AUTO', title: 'Automatisch: nach dem Wind (METAR) und bei LIVE nach den echten Landungen' },
+  wind:    { label: 'AUTO · WIND', title: 'Automatisch nach dem Wind (METAR)' },
+  live:    { label: 'AUTO · LIVE', title: 'Automatisch nach den echten Landungen' },
+  manual:  { label: 'MANUELL', title: 'Von Hand gewählt. Klick: wieder automatisch' },
+};
+const TRAFFIC_OPTIONS: Array<{ id: TrafficMode; label: string; title: string }> = [
+  { id: 'sim',  label: 'SIM',  title: 'Erfundener Verkehr zum Lotsen' },
+  { id: 'live', label: 'LIVE', title: 'Echte Flieger von adsb.lol' },
+];
+
+interface RadioPrefs {
+  log: boolean;
+  voice: boolean;
+}
+
+function loadRadioPrefs(): RadioPrefs {
+  try {
+    return { log: true, voice: true, ...JSON.parse(localStorage.getItem(RADIO_STORAGE) ?? '{}') };
+  } catch {
+    return { log: true, voice: true };
+  }
+}
+
+function loadSourcePref(): SourcePreference {
+  try {
+    const v = localStorage.getItem(SOURCE_STORAGE);
+    return SOURCE_OPTIONS.some((o) => o.id === v) ? v as SourcePreference : 'auto';
+  } catch {
+    return 'auto';
+  }
+}
 
 export function App() {
   const engineRef = useRef<GameEngine | null>(null);
@@ -25,14 +77,60 @@ export function App() {
     aircraft: [], conflicts: [], selectedId: null,
     paused: false, timeScale: 1, sweepEnabled: false, rangeNM: 80, trailLength: 6,
     pendingCmdTypes: {}, display: { ...DEFAULT_DISPLAY },
-    activeRunwayIds: [],
+    activeRunwayIds: [], radio: [],
+    trafficMode: 'sim', live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {},
+    weather: null, runwaySource: 'default',
   });
   const [airport, setAirport] = useState<Airport | null>(null);
+  const [navPoints, setNavPoints] = useState<Waypoint[]>([]);
+  const [stars, setStars] = useState<STAR[]>([]);
   const [selectedIcao, setSelectedIcao] = useState(() => pendingSessionRef.current?.icao ?? 'EDDF');
   const [loading, setLoading] = useState(true);
+  const [icaoInput, setIcaoInput] = useState(selectedIcao);
+  const [icaoError, setIcaoError] = useState<string | null>(null);
+  const lastGoodIcaoRef = useRef<string | null>(null);
+  const [sourcePref, setSourcePref] = useState<SourcePreference>(loadSourcePref);
+  const [activeSource, setActiveSource] = useState<AirportSource | null>(null);
+  const [navAvailable, setNavAvailable] = useState(false);
+
+  useEffect(() => { fetchNavStatus().then(setNavAvailable); }, []);
+
+  // ── Funk: Log und Sprachausgabe ──────────────────────────────────────────
+  const [radioPrefs, setRadioPrefs] = useState<RadioPrefs>(loadRadioPrefs);
+  const [voice] = useState(() => new RadioVoice());
+  const lastRadioIdRef = useRef(0);
+  const changeRadioPrefs = useCallback((patch: Partial<RadioPrefs>) => {
+    setRadioPrefs((prev) => {
+      const next = { ...prev, ...patch };
+      try { localStorage.setItem(RADIO_STORAGE, JSON.stringify(next)); } catch { /* nur Komfort */ }
+      return next;
+    });
+  }, []);
+  useEffect(() => { void loadTelephony(); }, []);
+  useEffect(() => { voice.setEnabled(radioPrefs.voice); }, [voice, radioPrefs.voice]);
+  useEffect(() => {
+    // Browser geben Ton erst nach einer Nutzeraktion frei
+    const unlock = () => voice.unlock();
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+    return () => { window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
+  }, [voice]);
+  useEffect(() => {
+    const fresh = gameState.radio.filter((m) => m.id > lastRadioIdRef.current);
+    if (fresh.length === 0) return;
+    lastRadioIdRef.current = fresh[fresh.length - 1].id;
+    if (radioPrefs.voice) fresh.forEach((m) => voice.enqueue(m));
+  }, [gameState.radio, radioPrefs.voice, voice]);
+
+  const changeSourcePref = useCallback((pref: SourcePreference) => {
+    setSourcePref(pref);
+    try { localStorage.setItem(SOURCE_STORAGE, pref); } catch { /* nur Komfort */ }
+  }, []);
   const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BREAKPOINT);
   const [bottomOpen, setBottomOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const closeHelp = useCallback(() => setShowHelp(false), []);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
@@ -55,11 +153,27 @@ export function App() {
   useEffect(() => {
     selectedIcaoRef.current = selectedIcao;
     setLoading(true);
-    fetchAirportData(selectedIcao).then(({ airport: ap, waypoints: wps, stars }) => {
+    voice.clear();
+    // Antworten zu einem inzwischen abgewählten Platz verwerfen (schnelles Tippen, doppelter Effekt im Dev-Modus)
+    let cancelled = false;
+    fetchAirportData(selectedIcao, sourcePref).then(({ airport: ap, waypoints: wps, stars: apStars, source }) => {
+      if (cancelled) return;
+      // Unbekannter Platz (weder Navigraph noch OurAirports) → beim bisherigen bleiben
+      if (source === 'generic' && lastGoodIcaoRef.current) {
+        setIcaoError(`${selectedIcao} nicht gefunden`);
+        setIcaoInput(lastGoodIcaoRef.current);
+        setSelectedIcao(lastGoodIcaoRef.current);
+        setLoading(false);
+        return;
+      }
+      lastGoodIcaoRef.current = selectedIcao;
+      setActiveSource(source);
       setAirport(ap);
+      setNavPoints(wps);
+      setStars(apStars);
       const engine = engineRef.current;
       if (!engine) return;
-      engine.setAirport(ap, wps, stars);
+      engine.setAirport(ap, wps, apStars);
       // Restore session after airport is set (so aircraft are in known airspace)
       if (pendingSessionRef.current) {
         engine.restoreSession(pendingSessionRef.current);
@@ -67,7 +181,44 @@ export function App() {
       }
       setLoading(false);
     });
-  }, [selectedIcao]);
+    return () => { cancelled = true; };
+  }, [selectedIcao, sourcePref, voice]);
+
+  // ── Echter Verkehr: alle 5 s abfragen, solange LIVE aktiv und der Tab sichtbar ist ──
+  useEffect(() => {
+    if (gameState.trafficMode !== 'live' || !airport) return;
+    let stopped = false;
+    let busy = false;
+    const poll = async () => {
+      if (busy || document.hidden) return;
+      busy = true;
+      try {
+        const list = await fetchLiveTraffic(airport.lat, airport.lng);
+        if (!stopped) engineRef.current?.setLiveTraffic(list);
+      } catch {
+        if (!stopped) engineRef.current?.setLiveError();
+      } finally {
+        busy = false;
+      }
+    };
+    void poll();
+    const id = setInterval(poll, LIVE_POLL_MS);
+    return () => { stopped = true; clearInterval(id); };
+  }, [gameState.trafficMode, airport]);
+
+  // ── Wetter: METAR beim Laden des Platzes, dann alle 10 Minuten ──
+  useEffect(() => {
+    if (!airport) return;
+    let stopped = false;
+    const poll = async () => {
+      const weather = await fetchWeather(airport.icao);
+      // Fehlschlag: letzten Stand behalten
+      if (!stopped && weather) engineRef.current?.setWeather(weather);
+    };
+    void poll();
+    const id = setInterval(poll, WEATHER_POLL_MS);
+    return () => { stopped = true; clearInterval(id); };
+  }, [airport]);
 
   const handleCommand = useCallback((id: string, cmd: ATCCommand) => {
     engineRef.current?.applyCommand(id, cmd);
@@ -108,19 +259,105 @@ export function App() {
       maxHeight: isMobile ? '60vh' : undefined,
     }}>
 
-      <a href="https://games.himmelreich.cloud/" style={{ color: '#446644', fontSize: 11, letterSpacing: 1, textDecoration: 'none', whiteSpace: 'nowrap' }}>← ALLE SPIELE</a>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <a href="https://games.himmelreich.cloud/" style={{ color: '#446644', fontSize: 11, letterSpacing: 1, textDecoration: 'none', whiteSpace: 'nowrap' }}>← ALLE SPIELE</a>
+        <button onClick={() => setShowHelp(true)} title="Was macht ein Lotse? Befehle, Funk, Punkte" style={HELP_BUTTON}>? HOWTO</button>
+      </div>
 
       {/* Airport selector */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         <label style={{ color: '#446644', fontSize: 10, letterSpacing: 1, whiteSpace: 'nowrap' }}>AIRPORT</label>
-        <select
-          value={selectedIcao}
-          onChange={(e) => setSelectedIcao(e.target.value)}
-          style={{ background: '#0a1a0a', border: '1px solid #1a4428', color: '#00ff88', fontFamily: '"Courier New", monospace', fontSize: 12, padding: '3px 6px', flex: 1, outline: 'none' }}
-        >
-          {AVAILABLE_AIRPORTS.map((icao) => <option key={icao} value={icao}>{icao}</option>)}
-        </select>
+        {/* Freie ICAO-Eingabe (Navigraph-Daten), Vorschläge per Datalist */}
+        <input
+          value={icaoInput}
+          list="atc-airports"
+          maxLength={4}
+          spellCheck={false}
+          onChange={(e) => {
+            const v = e.target.value.toUpperCase();
+            setIcaoInput(v);
+            setIcaoError(null);
+            if (AVAILABLE_AIRPORTS.includes(v)) setSelectedIcao(v);
+          }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && /^[A-Z0-9]{4}$/.test(icaoInput)) setSelectedIcao(icaoInput); }}
+          onBlur={() => { if (/^[A-Z0-9]{4}$/.test(icaoInput)) setSelectedIcao(icaoInput); else setIcaoInput(selectedIcao); }}
+          style={{ background: '#0a1a0a', border: '1px solid #1a4428', color: '#00ff88', fontFamily: '"Courier New", monospace', fontSize: 12, padding: '3px 6px', flex: 1, minWidth: 0, outline: 'none', textTransform: 'uppercase' }}
+        />
+        <datalist id="atc-airports">
+          {AVAILABLE_AIRPORTS.map((icao) => <option key={icao} value={icao} />)}
+        </datalist>
         {loading && <span style={{ color: '#446644', fontSize: 10 }}>LOAD</span>}
+      </div>
+      {icaoError && <div style={{ color: '#ff4444', fontSize: 10 }}>{icaoError}</div>}
+
+      {/* Datenquelle */}
+      <div>
+        <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
+          <span>DATA</span>
+          {activeSource && (
+            <span style={{ color: sourcePref !== 'auto' && sourcePref !== activeSource ? '#ffaa00' : '#00ff88' }}>
+              {SOURCE_NAMES[activeSource]}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 3 }}>
+          {SOURCE_OPTIONS.filter((o) => o.id !== 'navdata' || navAvailable).map((o) => (
+            <button
+              key={o.id}
+              title={o.title}
+              onClick={() => changeSourcePref(o.id)}
+              style={{
+                flex: 1,
+                background: sourcePref === o.id ? '#0a3020' : 'transparent',
+                border: `1px solid ${sourcePref === o.id ? '#00cc66' : '#1a4428'}`,
+                color: sourcePref === o.id ? '#00ff88' : '#446644',
+                fontFamily: '"Courier New", monospace',
+                fontSize: 11,
+                padding: '4px 2px',
+                cursor: 'pointer',
+                borderRadius: 2,
+              }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Verkehr: SIM oder LIVE */}
+      <div>
+        <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
+          <span>TRAFFIC</span>
+          {gameState.trafficMode === 'live' && (
+            <span style={{ color: gameState.live.error ? '#ffaa00' : '#00ff88' }}>
+              {gameState.live.updatedAt === null
+                ? (gameState.live.error ? 'keine Daten' : 'lädt…')
+                : `${gameState.live.count} AC · ${gameState.live.inbound} IN · ${Math.round((Date.now() - gameState.live.updatedAt) / 1000)} s`}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 3 }}>
+          {TRAFFIC_OPTIONS.map((o) => (
+            <button
+              key={o.id}
+              title={o.title}
+              onClick={() => engineRef.current?.setTrafficMode(o.id)}
+              style={{
+                flex: 1,
+                background: gameState.trafficMode === o.id ? '#0a3020' : 'transparent',
+                border: `1px solid ${gameState.trafficMode === o.id ? '#00cc66' : '#1a4428'}`,
+                color: gameState.trafficMode === o.id ? '#00ff88' : '#446644',
+                fontFamily: '"Courier New", monospace',
+                fontSize: 11,
+                padding: '4px 2px',
+                cursor: 'pointer',
+                borderRadius: 2,
+              }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Active landing runway */}
@@ -129,7 +366,20 @@ export function App() {
         if (ilsRunways.length === 0) return null;
         return (
           <div>
-            <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4 }}>ACTIVE RWY</div>
+            <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
+              <span>ACTIVE RWY</span>
+              {/* Herkunft der Landerichtung; nach Handwahl schaltet ein Klick zurück auf automatisch */}
+              <span
+                title={RUNWAY_SOURCES[gameState.runwaySource].title}
+                onClick={() => gameState.runwaySource === 'manual' && engineRef.current?.setRunwayAuto()}
+                style={{
+                  color: gameState.runwaySource === 'manual' ? '#ffaa00' : '#00ff88',
+                  cursor: gameState.runwaySource === 'manual' ? 'pointer' : 'default',
+                }}
+              >
+                {RUNWAY_SOURCES[gameState.runwaySource].label}
+              </span>
+            </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
               {ilsRunways.map((rwy) => {
                 const isActive = gameState.activeRunwayIds.includes(rwy.id);
@@ -157,6 +407,8 @@ export function App() {
           </div>
         );
       })()}
+
+      {airport && <StationPanel airport={airport} weather={gameState.weather} />}
 
       {/* Range selector */}
       <div>
@@ -213,7 +465,7 @@ export function App() {
       </div>
 
       {/* Alerts */}
-      <AlertBanner conflicts={gameState.conflicts} aircraft={gameState.aircraft} />
+      <AlertBanner conflicts={gameState.conflicts} aircraft={gameState.aircraft} names={gameState.liveNames} />
 
       {/* Traffic strips */}
       <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1 }}>
@@ -223,12 +475,15 @@ export function App() {
 
       {/* Commands */}
       <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1 }}>COMMANDS</div>
-      <CommandPanel selected={selected} airport={airport} onCommand={handleCommand} />
+      <CommandPanel
+        selected={selected} airport={airport} onCommand={handleCommand} activeRunwayIds={gameState.activeRunwayIds}
+        pendingCmdTypes={selected ? gameState.pendingCmdTypes[selected.id] : undefined}
+      />
 
       {/* Score / controls */}
       <ScorePanel
         score={gameState.score} landings={gameState.landings} violations={gameState.violations}
-        paused={gameState.paused} timeScale={gameState.timeScale} sweepEnabled={gameState.sweepEnabled}
+        paused={gameState.paused} timeScale={gameState.timeScale} timeLocked={gameState.trafficMode === 'live'} sweepEnabled={gameState.sweepEnabled}
         onPause={() => engineRef.current?.pause()}
         onResume={() => engineRef.current?.resume()}
         onToggleSweep={() => engineRef.current?.setSweep(!gameState.sweepEnabled)}
@@ -247,6 +502,7 @@ export function App() {
           <div style={{ display: 'flex', gap: 10, fontSize: 11, color: '#446644' }}>
             <span style={{ color: gameState.score >= 0 ? '#00ff88' : '#ff3333' }}>{gameState.score}</span>
             <span>{gameState.landings} LND</span>
+            <button onClick={() => setShowHelp(true)} title="HowTo" style={HELP_BUTTON}>?</button>
             <button onClick={() => setBottomOpen((o) => !o)} style={{ background: bottomOpen ? '#0a2a18' : 'transparent', border: '1px solid #1a4428', color: '#00cc66', padding: '2px 8px', fontFamily: '"Courier New", monospace', fontSize: 11, cursor: 'pointer', borderRadius: 2 }}>
               {bottomOpen ? '▲ RADAR' : '▼ CTRL'}
             </button>
@@ -263,7 +519,22 @@ export function App() {
             onSelectAircraft={handleSelectAircraft}
             onContextMenu={handleContextMenu}
           />
-          <DisplayBar display={gameState.display} onChange={(patch) => engineRef.current?.setDisplay(patch)} />
+          {radioPrefs.log && (
+            <RadioLog
+              messages={gameState.radio}
+              selectedId={gameState.selectedId}
+              onSelect={handleSelectAircraft}
+              height={isMobile ? 64 : 112}
+            />
+          )}
+          <DisplayBar
+            display={gameState.display}
+            onChange={(patch) => engineRef.current?.setDisplay(patch)}
+            extra={[
+              { label: 'RADIO', title: 'Funk-Log', active: radioPrefs.log, onClick: () => changeRadioPrefs({ log: !radioPrefs.log }) },
+              { label: 'VOICE', title: 'Funk hörbar', active: radioPrefs.voice, onClick: () => changeRadioPrefs({ voice: !radioPrefs.voice }) },
+            ]}
+          />
         </div>
       )}
 
@@ -276,13 +547,23 @@ export function App() {
           onAltitudePreview={handleAltitudePreview}
           pendingCmdTypes={gameState.pendingCmdTypes[contextMenu.aircraft.id] ?? []}
           activeRunwayIds={gameState.activeRunwayIds}
+          waypoints={navPoints}
+          stars={stars}
         />
       )}
 
       {(!isMobile || bottomOpen) && sidebar}
+
+      {showHelp && <HowTo onClose={closeHelp} />}
     </div>
   );
 }
+
+const HELP_BUTTON: React.CSSProperties = {
+  background: 'transparent', border: '1px solid #1a4428', color: '#00cc66',
+  fontFamily: '"Courier New", monospace', fontSize: 11, padding: '2px 8px',
+  cursor: 'pointer', borderRadius: 2, letterSpacing: 1,
+};
 
 // ── Display toggle bar ────────────────────────────────────────────────────────
 const DISPLAY_TOGGLES: { key: keyof DisplayOptions; label: string }[] = [
@@ -292,30 +573,41 @@ const DISPLAY_TOGGLES: { key: keyof DisplayOptions; label: string }[] = [
   { key: 'stars',    label: 'STARs'   },
 ];
 
-function DisplayBar({ display, onChange }: { display: DisplayOptions; onChange: (patch: Partial<DisplayOptions>) => void }) {
+interface ExtraToggle {
+  label: string;
+  title: string;
+  active: boolean;
+  onClick: () => void;
+}
+
+const toggleStyle = (active: boolean): React.CSSProperties => ({
+  background: active ? '#0a3020' : 'transparent',
+  border: `1px solid ${active ? '#00cc66' : '#1a4428'}`,
+  color: active ? '#00ff88' : '#446644',
+  fontFamily: '"Courier New", monospace',
+  fontSize: 10,
+  padding: '2px 8px',
+  cursor: 'pointer',
+  borderRadius: 2,
+  letterSpacing: 1,
+});
+
+function DisplayBar({ display, onChange, extra = [] }: { display: DisplayOptions; onChange: (patch: Partial<DisplayOptions>) => void; extra?: ExtraToggle[] }) {
   return (
     <div style={{
       display: 'flex', gap: 4, padding: '4px 8px',
       background: '#050e05', borderTop: '1px solid #0a2010',
-      flexShrink: 0,
+      flexShrink: 0, flexWrap: 'wrap',
     }}>
       {DISPLAY_TOGGLES.map(({ key, label }) => (
-        <button
-          key={key}
-          onClick={() => onChange({ [key]: !display[key] })}
-          style={{
-            background: display[key] ? '#0a3020' : 'transparent',
-            border: `1px solid ${display[key] ? '#00cc66' : '#1a4428'}`,
-            color: display[key] ? '#00ff88' : '#446644',
-            fontFamily: '"Courier New", monospace',
-            fontSize: 10,
-            padding: '2px 8px',
-            cursor: 'pointer',
-            borderRadius: 2,
-            letterSpacing: 1,
-          }}
-        >
+        <button key={key} onClick={() => onChange({ [key]: !display[key] })} style={toggleStyle(display[key])}>
           {label}
+        </button>
+      ))}
+      <div style={{ flex: 1 }} />
+      {extra.map((t) => (
+        <button key={t.label} title={t.title} onClick={t.onClick} style={toggleStyle(t.active)}>
+          {t.label}
         </button>
       ))}
     </div>

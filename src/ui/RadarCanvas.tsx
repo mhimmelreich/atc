@@ -12,16 +12,16 @@ interface Props {
 }
 
 /** Convert CSS-pixel canvas position to hit-test aircraft, using engine view state. */
-function hitTestAircraft(
+function hitTestAircraft<T extends { lat: number; lng: number }>(
   clientX: number,
   clientY: number,
   canvas: HTMLCanvasElement,
   viewLat: number,
   viewLng: number,
   rangeNM: number,
-  aircraft: Aircraft[],
+  aircraft: T[],
   threshold = 22
-): Aircraft | null {
+): T | null {
   const rect = canvas.getBoundingClientRect();
   const cx = clientX - rect.left;
   const cy = clientY - rect.top;
@@ -30,7 +30,7 @@ function hitTestAircraft(
   const scale = Math.min(W, H) / (rangeNM * 2); // px per NM
   const cosLat = Math.cos((viewLat * Math.PI) / 180);
 
-  let best: Aircraft | null = null;
+  let best: T | null = null;
   let bestDist = threshold;
 
   for (const ac of aircraft) {
@@ -102,9 +102,14 @@ export function RadarCanvas({ engine, aircraft, selectedId, onSelectAircraft, on
           e.clientX, e.clientY, canvas,
           engine.viewLat, engine.viewLng, engine.rangeNM, aircraft
         );
-        if (hit) {
-          onSelectAircraft(hit.id);
-          engine.selectAircraft(hit.id);
+        // Sonst ein echter Anflug (LIVE): der Klick übernimmt ihn
+        const target = hit ?? hitTestAircraft(
+          e.clientX, e.clientY, canvas,
+          engine.viewLat, engine.viewLng, engine.rangeNM, engine.liveTargets()
+        );
+        if (target) {
+          onSelectAircraft(target.id);
+          engine.selectAircraft(target.id);
           return; // don't start drag on aircraft click
         }
       }
@@ -147,10 +152,21 @@ export function RadarCanvas({ engine, aircraft, selectedId, onSelectAircraft, on
       e.preventDefault();
       const canvas = canvasRef.current;
       if (!canvas || !engine) return;
-      const hit = hitTestAircraft(
+      let hit = hitTestAircraft(
         e.clientX, e.clientY, canvas,
         engine.viewLat, engine.viewLng, engine.rangeNM, aircraft, 28
       );
+      if (!hit) {
+        // Echter Anflug (LIVE): übernehmen und gleich das Menü öffnen
+        const target = hitTestAircraft(
+          e.clientX, e.clientY, canvas,
+          engine.viewLat, engine.viewLng, engine.rangeNM, engine.liveTargets(), 28
+        );
+        if (target) {
+          engine.selectAircraft(target.id);
+          hit = engine.getSelectedAircraft() ?? null;
+        }
+      }
       if (!hit) return;
 
       // Compute aircraft's screen position and open menu in the farthest viewport corner

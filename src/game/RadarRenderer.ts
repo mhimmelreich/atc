@@ -1,6 +1,7 @@
 // filepath: src/game/RadarRenderer.ts
-import type { Aircraft, ConflictPair } from '@/types/aircraft';
-import { AIRCRAFT_TYPES } from './constants';
+import type { Aircraft, ConflictPair, TrailPoint } from '@/types/aircraft';
+import type { LiveAircraft, LiveInbound } from '@/types/live';
+import { typeData } from './constants';
 import type { Airport, AirportLayer, OsmWay } from '@/types/airport';
 import type { Waypoint, STAR } from '@/types/navdata';
 import { destinationPoint, toRad } from '@/utils/geo';
@@ -48,7 +49,15 @@ const C = {
   AC_WHITE:         '#cccccc',
   CONFLICT:         '#ff3333',
   WARNING:          '#ffaa00',
+
+  LIVE:             'rgba(170,190,180,0.85)',
+  LIVE_LABEL:       'rgba(150,170,160,0.85)',
+  LIVE_TRAIL:       'rgba(150,170,160,',
+  LIVE_INBOUND:     'rgba(120,215,255,0.95)',
 };
+
+// Echte Flieger: Beschriftung nur unterhalb dieser Höhe (darüber Überflieger ohne Bezug zum Platz)
+const LIVE_LABEL_MAX_FT = 20000;
 
 export interface DisplayOptions {
   labels: boolean;
@@ -81,6 +90,8 @@ export interface RenderOptions {
   stars: STAR[];
   display: DisplayOptions;
   activeRunwayIds: string[];
+  /** Echte Flieger (LIVE), nicht gelotst; inbound: Anflüge zum Platz, die man übernehmen kann (hex → Info) */
+  live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]>; inbound: Map<string, LiveInbound> };
 }
 
 export class RadarRenderer {
@@ -171,7 +182,9 @@ export class RadarRenderer {
       this.drawWaypoints(opts.waypoints, ll2c, W, H);
     }
 
-    const acMap = new Map(opts.aircraft.map((a) => [a.id, a]));
+    // Konflikte auch mit echten Fliegern (Kennung live-<hex>)
+    const acMap = new Map<string, { lat: number; lng: number }>(opts.aircraft.map((a) => [a.id, a]));
+    for (const ac of opts.live?.aircraft ?? []) acMap.set(`live-${ac.hex}`, ac);
     this.drawConflicts(opts.conflicts, acMap, ll2c);
 
     // Predicted track arc (drawn below aircraft symbols)
@@ -186,8 +199,14 @@ export class RadarRenderer {
       if (previewAc) this.drawAltitudeReachCircle(previewAc, opts.previewAltitude.targetAlt, ll2c);
     }
 
+    if (opts.live) this.drawLive(opts.live, ll2c, W, H, opts.trailLength, opts.display.labels, opts.now);
+
     for (const ac of opts.aircraft) this.drawTrail(ac, ll2c, opts.trailLength);
-    for (const ac of opts.aircraft) this.drawAircraft(ac, ll2c, ac.id === opts.selectedId, W, H, opts.display.labels);
+    for (const ac of opts.aircraft) {
+      const selected = ac.id === opts.selectedId;
+      const route = selected && ac.starId ? opts.stars.find((s) => s.id === ac.starId) : undefined;
+      this.drawAircraft(ac, ll2c, selected, W, H, opts.display.labels, route);
+    }
 
     // Compass border
     ctx.strokeStyle = C.COMPASS;
@@ -202,7 +221,68 @@ export class RadarRenderer {
     ctx.textAlign = 'left';
     ctx.fillText(`${opts.rangeNM.toFixed(0)} NM`, 8, 18);
 
+    // Quellenhinweis für die Live-Daten (ODbL)
+    if (opts.live) {
+      ctx.fillStyle = 'rgba(150,170,160,0.6)';
+      ctx.fillText('Traffic: adsb.lol (ODbL)', 8, H - 8);
+    }
+
     ctx.restore();
+  }
+
+  // ── Echte Flieger (LIVE) ────────────────────────────────────────────────────
+  private drawLive(
+    live: NonNullable<RenderOptions['live']>,
+    ll2c: (lat: number, lng: number) => { x: number; y: number },
+    W: number, H: number,
+    trailLength: number,
+    showLabels: boolean,
+    now: number,
+  ): void {
+    const { ctx } = this;
+    for (const ac of live.aircraft) {
+      const p = ll2c(ac.lat, ac.lng);
+      if (p.x < -40 || p.x > W + 40 || p.y < -40 || p.y > H + 40) continue;
+      // Anflug zum Platz: hellblau und immer beschriftet; hat er sich gemeldet, blinkt er bis zur Übernahme
+      const inbound = live.inbound.get(ac.hex);
+      const color = inbound ? C.LIVE_INBOUND : C.LIVE;
+
+      const trail = (live.trails.get(ac.hex) ?? []).slice(-trailLength);
+      trail.forEach((t, i) => {
+        const q = ll2c(t.lat, t.lng);
+        ctx.fillStyle = `${C.LIVE_TRAIL}${((i + 1) / trail.length) * 0.35})`;
+        ctx.fillRect(q.x - 1, q.y - 1, 2, 2);
+      });
+
+      // Radarziel als Quadrat mit Vektor für eine Minute Flugweg
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(p.x - 3, p.y - 3, 6, 6);
+      if (inbound?.called && Math.floor(now / 500) % 2 === 0) {
+        ctx.fillStyle = color;
+        ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+      }
+      if (ac.gs !== null && ac.track !== null) {
+        const ahead = destinationPoint(ac.lat, ac.lng, ac.track, ac.gs / 60);
+        const q = ll2c(ahead.lat, ahead.lng);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(q.x, q.y);
+        ctx.stroke();
+      }
+
+      if (showLabels && ac.altFt !== null && (inbound || ac.altFt < LIVE_LABEL_MAX_FT)) {
+        const fl = Math.round(ac.altFt / 100).toString().padStart(3, '0');
+        const vs = (ac.vs ?? 0) > 300 ? '↑' : (ac.vs ?? 0) < -300 ? '↓' : '→';
+        ctx.fillStyle = inbound ? C.LIVE_INBOUND : C.LIVE_LABEL;
+        ctx.font = '10px "Courier New"';
+        ctx.textAlign = 'left';
+        // Anflüge mit Startplatz, ohne bekannte Route mit "?"
+        const from = inbound ? ` ${inbound.guess ? '?' : inbound.origin ?? ''}` : '';
+        ctx.fillText(`${ac.callsign}${from}`, p.x + 8, p.y - 3);
+        ctx.fillText(`FL${fl} ${vs} ${ac.gs !== null ? Math.round(ac.gs) : ''}`, p.x + 8, p.y + 8);
+      }
+    }
   }
 
   // ── Coordinate factory ────────────────────────────────────────────────────
@@ -427,9 +507,10 @@ export class RadarRenderer {
       ctx.textAlign = 'center';
       const labelOffset = Math.max(10, len * 0.1);
       const ux = dx / len, uy = dy / len;
-      ctx.fillText(rwy.id,     p2.x - ux * labelOffset, p2.y - uy * labelOffset + 4);
+      // Kennung steht an ihrer eigenen Schwelle (p1), die Gegenrichtung am anderen Ende (p2)
+      ctx.fillText(rwy.id,     p1.x + ux * labelOffset, p1.y + uy * labelOffset + 4);
       if (rwy.id !== rwy.recipId) {
-        ctx.fillText(rwy.recipId, p1.x + ux * labelOffset, p1.y + uy * labelOffset + 4);
+        ctx.fillText(rwy.recipId, p2.x - ux * labelOffset, p2.y - uy * labelOffset + 4);
       }
     }
   }
@@ -516,7 +597,9 @@ export class RadarRenderer {
     ctx.textAlign  = 'left';
     const lx = thr.x + Math.sin(toRad(appFrom)) * 14;
     const ly = thr.y - Math.cos(toRad(appFrom)) * 14;
-    ctx.fillText(`ILS ${rwy.id} ${rwy.ils.frequencyMHz.toFixed(2)} Cat${rwy.ils.category}`, lx, ly);
+    // Frequenz 0 = unbekannt (angenommenes ILS aus freien Daten)
+    const freq = rwy.ils.frequencyMHz > 0 ? ` ${rwy.ils.frequencyMHz.toFixed(2)}` : '';
+    ctx.fillText(`ILS ${rwy.id}${freq} Cat${rwy.ils.category}`, lx, ly);
   }
 
   // ── STAR routes ───────────────────────────────────────────────────────────
@@ -529,6 +612,7 @@ export class RadarRenderer {
     ctx.strokeStyle = 'rgba(180,120,255,0.45)';
     ctx.lineWidth = 1;
     ctx.setLineDash([6, 5]);
+    const labelled = new Set<string>();
     for (const star of stars) {
       const pts = star.waypoints;
       if (pts.length < 2) continue;
@@ -540,12 +624,15 @@ export class RadarRenderer {
         ctx.lineTo(p.x, p.y);
       }
       ctx.stroke();
-      // STAR id label at first waypoint
+      // STAR name label at first waypoint (once per name, runway variants share it)
+      const label = star.name ?? star.id;
+      if (labelled.has(label)) continue;
+      labelled.add(label);
       ctx.setLineDash([]);
       ctx.fillStyle = 'rgba(180,120,255,0.70)';
       ctx.font = '8px "Courier New"';
       ctx.textAlign = 'left';
-      ctx.fillText(star.id, first.x + 5, first.y - 4);
+      ctx.fillText(label, first.x + 5, first.y - 4);
       ctx.setLineDash([6, 5]);
     }
     ctx.restore();
@@ -594,7 +681,7 @@ export class RadarRenderer {
   // ── Conflict lines ─────────────────────────────────────────────────────────
   private drawConflicts(
     conflicts: ConflictPair[],
-    acMap: Map<string, Aircraft>,
+    acMap: Map<string, { lat: number; lng: number }>,
     ll2c: (lat: number, lng: number) => { x: number; y: number }
   ): void {
     const { ctx } = this;
@@ -764,11 +851,43 @@ export class RadarRenderer {
     ll2c: (lat: number, lng: number) => { x: number; y: number },
     selected: boolean,
     W: number, H: number,
-    showLabel = true
+    showLabel = true,
+    route?: STAR,
   ): void {
     const { ctx } = this;
     const p = ll2c(ac.lat, ac.lng);
     if (p.x < -40 || p.x > W + 40 || p.y < -40 || p.y > H + 40) return;
+
+    // Restliche STAR-Route des ausgewählten Fliegers hervorheben
+    if (route && ac.state === 'enroute' && !ac.directTo && !ac.clearedILS) {
+      const rest = route.waypoints.slice(ac.starLegIndex ?? 0);
+      if (rest.length > 0) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(200,150,255,0.85)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        for (const w of rest) {
+          const q = ll2c(w.lat, w.lng);
+          ctx.lineTo(q.x, q.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Direct-to-Linie zum Zielpunkt (nur ausgewählter Flieger)
+    if (selected && ac.directTo) {
+      const t = ll2c(ac.directTo.lat, ac.directTo.lng);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,220,80,0.6)';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(t.x, t.y);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     let color = C.AC_GREEN;
     if (ac.conflict)     color = C.AC_RED;
@@ -796,7 +915,7 @@ export class RadarRenderer {
       const fl  = Math.round(ac.altitudeFt / 100);
       const spd = Math.round(ac.speedKts);
       const vs  = ac.verticalSpeedFpm > 100 ? '↑' : ac.verticalSpeedFpm < -100 ? '↓' : '→';
-      const wake = AIRCRAFT_TYPES[ac.type]?.wake;
+      const wake = typeData(ac.type).wake;
 
       ctx.fillStyle  = color;
       ctx.font       = `${selected ? 'bold ' : ''}11px "Courier New"`;
@@ -804,6 +923,14 @@ export class RadarRenderer {
       ctx.fillText(ac.callsign, p.x + 12, p.y - 4);
       ctx.fillText(`FL${fl.toString().padStart(3, '0')} ${vs}`, p.x + 12, p.y + 8);
       ctx.fillText(`${spd}kt`, p.x + 12, p.y + 20);
+      if (ac.clearedILS && ac.assignedRunway) {
+        // ILS zugewiesen → "ILS25L"; mit Landefreigabe "LND25L"; etabliert ohne Freigabe orange
+        const tag = `${ac.clearedToLand ? 'LND' : 'ILS'}${ac.assignedRunway}`;
+        const tagX = p.x + 12 + ctx.measureText(`${spd}kt `).width;
+        ctx.fillStyle = ac.clearedToLand ? '#00ff88' : ac.state === 'established' ? '#ffaa00' : '#4488ff';
+        ctx.fillText(tag, tagX, p.y + 20);
+        ctx.fillStyle = color;
+      }
 
       // Wake turbulence badge for Heavy / Super
       if (wake === 'H' || wake === 'J') {

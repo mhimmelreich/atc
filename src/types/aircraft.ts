@@ -30,6 +30,10 @@ export interface Aircraft {
   trail: TrailPoint[];
   clearedILS: boolean;
   assignedRunway?: string;
+  /** Landefreigabe erteilt; ohne sie startet der Flieger auf dem kurzen Endanflug durch */
+  clearedToLand?: boolean;
+  /** Direct-to auf einen Wegpunkt außerhalb der eigenen STAR; nach Erreichen wird der Kurs gehalten */
+  directTo?: { id: string; lat: number; lng: number };
   conflict: boolean;
   warning: boolean;
   /** Forced turn direction for the current heading command; undefined = shortest path */
@@ -38,6 +42,16 @@ export interface Aircraft {
   starId?: string;
   /** Index into the STAR's waypoints array — current target leg */
   starLegIndex?: number;
+  /** Pilot hat sich auf der Frequenz gemeldet (Erstanruf) */
+  contacted?: boolean;
+  /** Lotse hat den Flieger angesprochen ("radar contact") */
+  identified?: boolean;
+  /** An den Turm übergeben: Funk läuft auf der Turmfrequenz */
+  tower?: boolean;
+  /** Übernommener echter Flieger (LIVE): Transponder-Adresse */
+  liveHex?: string;
+  /** Startplatz (echte Flieger, laut Flugroute) */
+  origin?: string;
 }
 
 export interface ConflictPair {
@@ -52,4 +66,10 @@ export type ATCCommand =
   | { type: 'heading'; value: number; turnDirection?: 'left' | 'right' }
   | { type: 'altitude'; value: number }
   | { type: 'speed'; value: number }
-  | { type: 'ils'; runwayId: string };
+  | { type: 'ils'; runwayId: string }
+  | { type: 'land' }
+  /** Übergabe an den Turm (nach der ILS-Freigabe) */
+  | { type: 'tower' }
+  | { type: 'direct'; waypointId: string; lat: number; lng: number }
+  /** Anflugpunkt direkt, danach die gewählte STAR ab diesem Punkt */
+  | { type: 'star'; starId: string; waypointId: string };

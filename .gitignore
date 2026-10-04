@@ -2,3 +2,11 @@ node_modules/
 dist/
 .env
 *.local
+
+# Navigraph-AIRAC-Daten sind lizenziert und dürfen nicht ins Repo
+data/navdata/
+lnm_*.zip
+lnm_*.exe
+
+# OurAirports-CSVs werden vom Server selbst geladen
+data/opendata/

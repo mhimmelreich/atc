@@ -1,10 +1,32 @@
 // filepath: src/game/GameEngine.ts
-import type { Airport } from '@/types/airport';
-import type { Aircraft, ATCCommand, ConflictPair } from '@/types/aircraft';
+import type { Airport, Runway } from '@/types/airport';
+import type { Aircraft, ATCCommand, ConflictPair, TrailPoint } from '@/types/aircraft';
+import type { LiveAircraft, LiveInbound, LiveStatus, TrafficMode } from '@/types/live';
 import type { Waypoint, STAR } from '@/types/navdata';
+import type { RadioMessage } from '@/types/radio';
+import type { Weather } from '@/types/weather';
 import { AircraftManager } from './AircraftManager';
+import { inbound, callsIn, liveToAircraft, liveId, hexOf, landingRunway, type Inbound, type TakeoverContext } from './LiveTraffic';
 import { RadarRenderer, DEFAULT_DISPLAY, type DisplayOptions } from './RadarRenderer';
+import { headingDiff } from '@/utils/aviation';
+import { pad3 } from './Speech';
+import { destinationPoint, distanceNM } from '@/utils/geo';
 import { SCORE_LANDING, SCORE_GOAROUND, SCORE_SEPARATION_VIOLATION, SCORE_COLLISION } from './constants';
+
+const RADIO_LOG_SIZE = 50;
+const LIVE_TRAIL_MAX = 20;
+const LIVE_EXTRAPOLATE_MAX_S = 30;
+// Landerichtung aus dem Wind: erst ab etwas Wind; umgestellt wird erst bei mehr als 2 kt Rückenwind (Gegenrichtung)
+const WIND_MIN_KT = 3;
+const WIND_SWITCH_KT = 4;
+// Landerichtung aus dem echten Verkehr: Landungen der letzten 10 Minuten je Richtung
+const LIVE_FINALS_MEMORY_MS = 10 * 60_000;
+const LIVE_FINALS_SWITCH = 2;
+// Bahnen gleicher Betriebsrichtung (Parallelbahnen)
+const SAME_DIRECTION_DEG = 20;
+
+/** Woher die aktiven Bahnen kommen: Standard, Wind (METAR), echte Landungen (LIVE) oder von Hand */
+export type RunwaySource = 'default' | 'wind' | 'live' | 'manual';
 
 export interface GameState {
   score: number;
@@ -23,6 +45,15 @@ export interface GameState {
   display: DisplayOptions;
   /** Active landing runway IDs — only these runways' ILS is available (empty = all) */
   activeRunwayIds: string[];
+  /** Letzte Funkmeldungen, älteste zuerst */
+  radio: RadioMessage[];
+  trafficMode: TrafficMode;
+  live: LiveStatus;
+  /** Rufzeichen der echten Flieger (für Warnungen) */
+  liveNames: Record<string, string>;
+  /** Wetter am Platz (METAR), null solange unbekannt */
+  weather: Weather | null;
+  runwaySource: RunwaySource;
 }
 
 export { type DisplayOptions };
@@ -41,6 +72,10 @@ export interface SessionData {
   timeScale: number;
   display: DisplayOptions;
   activeRunwayIds: string[];
+  runwaySource?: RunwaySource;
+  trafficMode?: TrafficMode;
+  /** Übernommene echte Flieger: ihr echtes Gegenstück bleibt ausgeblendet */
+  liveHexes?: string[];
   viewLat: number;
   viewLng: number;
   aircraft: import('@/types/aircraft').Aircraft[];
@@ -67,12 +102,24 @@ export class GameEngine {
     pendingCmdTypes: {},
     display: { ...DEFAULT_DISPLAY },
     activeRunwayIds: [],
+    radio: [],
+    trafficMode: 'sim',
+    live: { count: 0, inbound: 0, updatedAt: null, error: false },
+    liveNames: {},
+    weather: null,
+    runwaySource: 'default',
   };
   get rangeNM(): number { return this.state.rangeNM; }
   private onStateChange: StateCallback;
   private rafId: number | null = null;
   private lastTs: number | null = null;
   private conflictCooldowns = new Set<string>();
+  private liveTraffic: LiveAircraft[] = [];
+  private liveTrails = new Map<string, TrailPoint[]>();
+  private liveInbound = new Map<string, Inbound>(); // hex → Anflug zum gewählten Platz
+  private takenOver = new Set<string>();             // hex der übernommenen echten Flieger
+  private liveFrame: LiveAircraft[] = [];            // echte Flieger im letzten Bild (für Klicks)
+  private liveFinals = new Map<string, { heading: number; at: number }>(); // hex → Bahnkurs, zuletzt im Endanflug gesehen
 
   constructor(onStateChange: StateCallback) {
     this.onStateChange = onStateChange;
@@ -94,21 +141,17 @@ export class GameEngine {
             this.state = { ...this.state, score: this.state.score + penalty, violations: this.state.violations + 1 };
             setTimeout(() => this.conflictCooldowns.delete(key), 10000);
           }
-          const existing = this.conflicts.find((c) => c.a === event.pair!.a && c.b === event.pair!.b);
-          if (!existing) this.conflicts = [...this.conflicts, event.pair!];
+          this.conflicts = [...this.conflicts.filter((c) => !samePair(c, event.pair!)), event.pair!];
           break;
         }
-        case 'warning': {
-          const existing = this.conflicts.find((c) => c.a === event.pair!.a && c.b === event.pair!.b);
-          if (!existing) this.conflicts = [...this.conflicts, event.pair!];
+        case 'warning':
+          this.conflicts = [...this.conflicts.filter((c) => !samePair(c, event.pair!)), event.pair!];
           break;
-        }
         case 'clear':
-          if (event.pair) {
-            this.conflicts = this.conflicts.filter(
-              (c) => !(c.a === event.pair!.a && c.b === event.pair!.b)
-            );
-          }
+          if (event.pair) this.conflicts = this.conflicts.filter((c) => !samePair(c, event.pair!));
+          break;
+        case 'radio':
+          this.state = { ...this.state, radio: [...this.state.radio.slice(1 - RADIO_LOG_SIZE), event.message!] };
           break;
       }
     });
@@ -135,8 +178,132 @@ export class GameEngine {
     const activeRunwayIds = ilsRunways.length > 0
       ? this.pickPrimaryDirection(ilsRunways).map((r) => r.id)
       : [];
-    this.state = { ...this.state, activeRunwayIds };
-    for (let i = 0; i < 3; i++) this.manager.forceSpawn();
+    this.state = { ...this.state, activeRunwayIds, radio: [], weather: null, runwaySource: 'default' };
+    this.manager.setSpawnStars(this.activeStars());
+    this.clearLive();
+    this.liveFinals.clear();
+    if (this.state.trafficMode === 'sim') for (let i = 0; i < 3; i++) this.manager.forceSpawn();
+  }
+
+  /** SIM: erfundener Verkehr; LIVE: echte Flieger (adsb.lol), kein erfundener Verkehr, Echtzeit */
+  setTrafficMode(mode: TrafficMode): void {
+    if (mode === this.state.trafficMode) return;
+    this.state = { ...this.state, trafficMode: mode, selectedId: null, timeScale: mode === 'live' ? 1 : this.state.timeScale };
+    this.manager.setSpawning(mode === 'sim');
+    this.manager.clearTraffic();
+    this.clearLive();
+    this.liveFinals.clear();
+    if (mode === 'sim' && this.airport) for (let i = 0; i < 3; i++) this.manager.forceSpawn();
+    this.trySave();
+  }
+
+  setLiveTraffic(list: LiveAircraft[]): void {
+    if (this.state.trafficMode !== 'live') return;
+    this.liveTraffic = list;
+    // Spur aus den gemeldeten Positionen
+    const trails = new Map<string, TrailPoint[]>();
+    for (const ac of list) {
+      if (ac.ground) continue;
+      const trail = this.liveTrails.get(ac.hex) ?? [];
+      const last = trail[trail.length - 1];
+      trails.set(ac.hex, !last || last.ts < ac.ts ? [...trail, { lat: ac.lat, lng: ac.lng, ts: ac.ts }].slice(-LIVE_TRAIL_MAX) : trail);
+    }
+    this.liveTrails = trails;
+    this.detectRunwayInUse(list);
+
+    // Anflüge zum gewählten Platz; zwischen 40 und 15 NM melden sie sich (nächster zuerst)
+    this.liveInbound.clear();
+    const calls: Array<{ ac: LiveAircraft; dist: number }> = [];
+    const airport = this.airport;
+    if (airport) {
+      for (const ac of list) {
+        const inb = this.takenOver.has(ac.hex) ? null : inbound(ac, airport);
+        if (!inb) continue;
+        this.liveInbound.set(ac.hex, inb);
+        if (callsIn(ac, inb, airport)) calls.push({ ac, dist: distanceNM(ac.lat, ac.lng, airport.lat, airport.lng) });
+      }
+      calls.sort((a, b) => a.dist - b.dist);
+      const ctx = this.takeoverContext(airport);
+      this.manager.setAnnouncements(calls.map(({ ac }) => liveToAircraft(ac, ctx, this.liveInbound.get(ac.hex)?.origin)));
+    }
+
+    const liveNames: Record<string, string> = {};
+    for (const ac of list) liveNames[liveId(ac.hex)] = ac.callsign;
+    this.state = {
+      ...this.state,
+      live: { count: trails.size, inbound: this.liveInbound.size, updatedAt: Date.now(), error: false },
+      liveNames,
+    };
+  }
+
+  /** Wetter vom Platz: echtes QNH und Wind im Funk, Landerichtung nach dem Wind */
+  setWeather(weather: Weather | null): void {
+    if (weather && weather.icao !== this.airport?.icao) return;
+    this.state = { ...this.state, weather };
+    this.manager.setWeather(weather);
+    this.runwayFromWind();
+  }
+
+  setLiveError(): void {
+    this.state = { ...this.state, live: { ...this.state.live, error: true } };
+  }
+
+  private clearLive(): void {
+    this.liveTraffic = [];
+    this.liveTrails.clear();
+    this.liveInbound.clear();
+    this.takenOver.clear();
+    this.liveFrame = [];
+    this.state = { ...this.state, live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {} };
+  }
+
+  /** Echten Anflug übernehmen: er wird lotsbar, sein echtes Gegenstück verschwindet vom Radar */
+  private takeOver(id: string): boolean {
+    const hex = hexOf(id);
+    const inb = hex ? this.liveInbound.get(hex) : undefined;
+    const ac = hex ? this.liveFrame.find((a) => a.hex === hex) : undefined;
+    if (!hex || !inb || !ac || !this.airport || this.state.trafficMode !== 'live') return false;
+    this.takenOver.add(hex);
+    this.liveInbound.delete(hex);
+    this.manager.adopt(liveToAircraft(ac, this.takeoverContext(this.airport), inb.origin, this.manager.announcedAs(id)));
+    this.trySave();
+    return true;
+  }
+
+  private takeoverContext(airport: Airport): TakeoverContext {
+    return { airport, stars: this.activeStars(), activeRunwayIds: this.state.activeRunwayIds };
+  }
+
+  /** Übernehmbare echte Anflüge an ihrer aktuellen Position (für Klicks aufs Radar) */
+  liveTargets(): Array<{ id: string; lat: number; lng: number }> {
+    return this.liveFrame
+      .filter((ac) => this.liveInbound.has(ac.hex))
+      .map((ac) => ({ id: liveId(ac.hex), lat: ac.lat, lng: ac.lng }));
+  }
+
+  /** Anflüge fürs Radarbild: Startplatz, geschätzt, schon gemeldet */
+  private inboundView(): Map<string, LiveInbound> {
+    const view = new Map<string, LiveInbound>();
+    for (const [hex, inb] of this.liveInbound) {
+      view.set(hex, { origin: inb.origin, guess: inb.kind === 'guess', called: !!this.manager.announcedAs(liveId(hex)) });
+    }
+    return view;
+  }
+
+  /** Echte Flieger auf die aktuelle Zeit vorausgerechnet (zwischen zwei Abfragen) */
+  private liveNow(): LiveAircraft[] {
+    const now = Date.now();
+    const out: LiveAircraft[] = [];
+    for (const ac of this.liveTraffic) {
+      // Übernommene Flieger lotst der Spieler, ihr echtes Gegenstück wird nicht gezeigt
+      if (ac.ground || this.takenOver.has(ac.hex)) continue;
+      const dt = Math.min(LIVE_EXTRAPOLATE_MAX_S, Math.max(0, (now - ac.ts) / 1000));
+      if (ac.gs === null || ac.track === null || dt === 0) { out.push(ac); continue; }
+      const p = destinationPoint(ac.lat, ac.lng, ac.track, (ac.gs * dt) / 3600);
+      const altFt = ac.altFt !== null && ac.vs !== null ? ac.altFt + (ac.vs * dt) / 60 : ac.altFt;
+      out.push({ ...ac, lat: p.lat, lng: p.lng, altFt });
+    }
+    return out;
   }
 
   start(): void {
@@ -146,6 +313,11 @@ export class GameEngine {
       if (this.lastTs === null) this.lastTs = ts;
       const dt = Math.min((ts - this.lastTs) / 1000, 0.1);
       this.lastTs = ts;
+
+      // Echter Verkehr: auf jetzt vorausgerechnet, Hindernis für die Staffelung
+      const live = this.state.trafficMode === 'live' ? this.liveNow() : [];
+      this.liveFrame = live;
+      this.manager.setObstacles(live.flatMap((ac) => (ac.altFt === null ? [] : [{ id: liveId(ac.hex), lat: ac.lat, lng: ac.lng, altitudeFt: ac.altFt }])));
 
       if (!this.state.paused) this.manager.update(dt * this.state.timeScale, ts);
 
@@ -157,9 +329,8 @@ export class GameEngine {
       }
 
       // Remove conflicts where either aircraft has left the radar
-      this.conflicts = this.conflicts.filter((c) => {
-        return aircraft.some((ac) => ac.id === c.a) && aircraft.some((ac) => ac.id === c.b);
-      });
+      const present = new Set([...aircraft.map((ac) => ac.id), ...live.map((ac) => liveId(ac.hex))]);
+      this.conflicts = this.conflicts.filter((c) => present.has(c.a) && present.has(c.b));
 
       this.state = { ...this.state, aircraft, conflicts: this.conflicts, pendingCmdTypes };
       this.onStateChange(this.state);
@@ -179,9 +350,10 @@ export class GameEngine {
           viewLng: this.viewLng,
           previewHeading: this.previewHdg,
           previewAltitude: this.previewAlt,
-          stars: this.stars,
+          stars: this.activeStars(),
           display: this.state.display,
           activeRunwayIds: this.state.activeRunwayIds,
+          live: this.state.trafficMode === 'live' ? { aircraft: live, trails: this.liveTrails, inbound: this.inboundView() } : undefined,
         });
       }
 
@@ -196,7 +368,8 @@ export class GameEngine {
 
   pause():  void { this.state = { ...this.state, paused: true }; }
   resume(): void { this.state = { ...this.state, paused: false }; }
-  setTimeScale(s: number):    void { this.state = { ...this.state, timeScale: s };                                    this.trySave(); }
+  // LIVE läuft in Echtzeit, sonst laufen eigene und echte Flieger auseinander
+  setTimeScale(s: number):    void { this.state = { ...this.state, timeScale: this.state.trafficMode === 'live' ? 1 : s }; this.trySave(); }
   setSweep(enabled: boolean): void { this.state = { ...this.state, sweepEnabled: enabled };                          this.trySave(); }
   setRange(nm: number):       void { this.state = { ...this.state, rangeNM: Math.max(2, Math.min(200, nm)) };        this.trySave(); }
   setTrailLength(n: number):  void { this.state = { ...this.state, trailLength: n };                                 this.trySave(); }
@@ -233,11 +406,110 @@ export class GameEngine {
     this.trySave();
   }
 
+  /** Bahnen mit ILS, auf denen gelandet werden darf */
+  private landingRunways(): Runway[] {
+    return this.airport?.runways.filter((r) => r.ils && r.role !== 'departure') ?? [];
+  }
+
+  /** Alle Landebahnen einer Betriebsrichtung aktivieren; ein Wechsel steht im Funk-Log */
+  private applyDirection(heading: number, source: RunwaySource, reason: string): void {
+    const ids = this.landingRunways().filter((r) => Math.abs(headingDiff(r.heading, heading)) < SAME_DIRECTION_DEG).map((r) => r.id);
+    if (ids.length === 0) return;
+    const current = this.state.activeRunwayIds;
+    const changed = ids.length !== current.length || ids.some((id) => !current.includes(id));
+    this.state = { ...this.state, activeRunwayIds: ids, runwaySource: source };
+    if (changed) {
+      this.manager.setSpawnStars(this.activeStars());
+      this.manager.info(`Landerichtung ${ids.join(' ')} (${reason})`);
+    }
+    this.trySave();
+  }
+
+  /** Landerichtung mit dem meisten Gegenwind, solange weder Hand noch echter Verkehr entschieden haben */
+  private runwayFromWind(): void {
+    const w = this.state.weather;
+    const source = this.state.runwaySource;
+    if (!w || w.windDir === null || w.windKt < WIND_MIN_KT || (source !== 'default' && source !== 'wind')) return;
+    const windDir = w.windDir;
+    // Wind und Bahnkurse sind rechtweisend
+    const headwind = (r: Runway) => w.windKt * Math.cos(((windDir - r.heading) * Math.PI) / 180);
+    const runways = this.landingRunways();
+    const best = runways.reduce<Runway | null>((b, r) => (!b || headwind(r) > headwind(b) ? r : b), null);
+    if (!best) return;
+    const active = runways.filter((r) => this.state.activeRunwayIds.includes(r.id));
+    const current = active.length > 0 ? Math.max(...active.map(headwind)) : -Infinity;
+    if (headwind(best) - current > WIND_SWITCH_KT) {
+      this.applyDirection(best.heading, 'wind', `Wind ${pad3(windDir)}° ${Math.round(w.windKt)} kt`);
+    } else {
+      this.state = { ...this.state, runwaySource: 'wind' };
+    }
+  }
+
+  /**
+   * LIVE: Landerichtung der echten Flieger übernehmen. Wechsel erst, wenn in 10 Minuten mindestens zwei
+   * in der anderen Richtung gelandet sind und keiner in der aktuellen.
+   */
+  private detectRunwayInUse(list: LiveAircraft[]): void {
+    const airport = this.airport;
+    if (!airport) return;
+    const now = Date.now();
+    for (const ac of list) {
+      const rwy = landingRunway(ac, airport);
+      if (rwy) this.liveFinals.set(ac.hex, { heading: rwy.heading, at: now });
+    }
+    for (const [hex, f] of this.liveFinals) if (now - f.at > LIVE_FINALS_MEMORY_MS) this.liveFinals.delete(hex);
+    if (this.state.runwaySource === 'manual') return;
+
+    const groups: Array<{ heading: number; count: number }> = [];
+    for (const f of this.liveFinals.values()) {
+      const g = groups.find((x) => Math.abs(headingDiff(x.heading, f.heading)) < SAME_DIRECTION_DEG);
+      if (g) g.count++;
+      else groups.push({ heading: f.heading, count: 1 });
+    }
+    const active = this.landingRunways().filter((r) => this.state.activeRunwayIds.includes(r.id));
+    const isActive = (heading: number) => active.some((r) => Math.abs(headingDiff(r.heading, heading)) < SAME_DIRECTION_DEG);
+    const current = groups.filter((g) => isActive(g.heading)).reduce((n, g) => n + g.count, 0);
+    const other = groups.filter((g) => !isActive(g.heading)).sort((a, b) => b.count - a.count)[0];
+    if (current === 0 && other && other.count >= LIVE_FINALS_SWITCH) {
+      this.applyDirection(other.heading, 'live', 'echter Verkehr');
+    } else if (current >= LIVE_FINALS_SWITCH && this.state.runwaySource !== 'live') {
+      this.state = { ...this.state, runwaySource: 'live' };
+      this.trySave();
+    }
+  }
+
+  /** Landerichtung wieder automatisch wählen (nach Wind und, bei LIVE, nach dem echten Verkehr) */
+  setRunwayAuto(): void {
+    this.state = { ...this.state, runwaySource: 'default' };
+    this.detectRunwayInUse([]);
+    this.runwayFromWind();
+    this.trySave();
+  }
+
   toggleActiveRunway(id: string): void {
     const ids = this.state.activeRunwayIds;
-    const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
-    this.state = { ...this.state, activeRunwayIds: next };
+    let next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
+    const rwy = this.airport?.runways.find((r) => r.id === id);
+    const opposite = (x: string) => {
+      const o = this.airport?.runways.find((r) => r.id === x);
+      return !!(o && rwy && Math.abs(headingDiff(o.heading, rwy.heading)) > 90);
+    };
+    if (!ids.includes(id) && ids.some(opposite)) {
+      // Betriebsrichtungswechsel: Bahnen der Gegenrichtung auf ihre Gegenbahn umstellen, keine gemischten Richtungen
+      const flipped = ids.map((x) => (opposite(x) ? this.airport!.runways.find((r) => r.id === x)!.recipId : x));
+      next = [...new Set([...flipped, id])];
+    }
+    // Von Hand gewählt: keine automatische Umstellung mehr, bis AUTO gedrückt wird
+    this.state = { ...this.state, activeRunwayIds: next, runwaySource: 'manual' };
+    this.manager.setSpawnStars(this.activeStars());
     this.trySave();
+  }
+
+  /** STARs für die aktiven Bahnen (oder "ALL"); ohne Treffer alle STARs */
+  private activeStars(): STAR[] {
+    const ids = this.state.activeRunwayIds;
+    const matching = this.stars.filter((s) => s.runway === 'ALL' || ids.includes(s.runway));
+    return matching.length > 0 ? matching : this.stars;
   }
 
   /** Pick all ILS runways whose heading is closest to the median heading of the set. */
@@ -255,7 +527,11 @@ export class GameEngine {
     this.previewAlt = aircraftId && targetAlt !== null ? { aircraftId, targetAlt } : null;
   }
 
-  selectAircraft(id: string | null): void { this.state = { ...this.state, selectedId: id }; }
+  selectAircraft(id: string | null): void {
+    // Klick auf einen echten Anflug übernimmt ihn
+    if (id && !this.manager.get(id)) this.takeOver(id);
+    this.state = { ...this.state, selectedId: id && this.manager.get(id) ? id : null };
+  }
   applyCommand(id: string, cmd: ATCCommand): void { this.manager.applyCommand(id, cmd, this.state.timeScale); }
   getSelectedAircraft(): Aircraft | undefined {
     if (!this.state.selectedId) return undefined;
@@ -278,6 +554,9 @@ export class GameEngine {
         timeScale: this.state.timeScale,
         display: this.state.display,
         activeRunwayIds: this.state.activeRunwayIds,
+        runwaySource: this.state.runwaySource,
+        trafficMode: this.state.trafficMode,
+        liveHexes: [...this.takenOver],
         viewLat: this.viewLat,
         viewLng: this.viewLng,
         aircraft: this.manager.exportAircraft(),
@@ -307,13 +586,23 @@ export class GameEngine {
       rangeNM: data.rangeNM,
       trailLength: data.trailLength,
       sweepEnabled: data.sweepEnabled,
-      timeScale: data.timeScale ?? 1,
+      timeScale: data.trafficMode === 'live' ? 1 : data.timeScale ?? 1,
       display: data.display ?? { ...DEFAULT_DISPLAY },
       activeRunwayIds: data.activeRunwayIds ?? [],
+      runwaySource: data.runwaySource ?? 'default',
+      trafficMode: data.trafficMode ?? 'sim',
     };
+    this.manager.setSpawning(this.state.trafficMode === 'sim');
+    this.manager.setSpawnStars(this.activeStars());
+    this.takenOver = new Set(data.liveHexes ?? []);
     this.viewLat = data.viewLat;
     this.viewLng = data.viewLng;
     this.manager.importAircraft(data.aircraft);
     this.manager.importPendingCommands(data.pendingCommands);
   }
+}
+
+/** Dasselbe Flieger-Paar, egal in welcher Reihenfolge */
+function samePair(x: ConflictPair, y: ConflictPair): boolean {
+  return (x.a === y.a && x.b === y.b) || (x.a === y.b && x.b === y.a);
 }
