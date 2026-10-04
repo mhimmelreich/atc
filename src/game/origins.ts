@@ -1,0 +1,50 @@
+// Startplätze für erfundenen Verkehr (SIM): bestimmen, aus welcher Richtung ein Flieger kommt
+export interface Origin {
+  icao: string;
+  lat: number;
+  lng: number;
+}
+
+export const ORIGINS: Origin[] = [
+  { icao: 'EGLL', lat: 51.470, lng: -0.454 },
+  { icao: 'EGKK', lat: 51.148, lng: -0.190 },
+  { icao: 'EGCC', lat: 53.354, lng: -2.275 },
+  { icao: 'EIDW', lat: 53.421, lng: -6.270 },
+  { icao: 'LFPG', lat: 49.010, lng: 2.548 },
+  { icao: 'LFMN', lat: 43.658, lng: 7.216 },
+  { icao: 'EHAM', lat: 52.309, lng: 4.764 },
+  { icao: 'EBBR', lat: 50.901, lng: 4.484 },
+  { icao: 'LEMD', lat: 40.472, lng: -3.561 },
+  { icao: 'LEBL', lat: 41.297, lng: 2.078 },
+  { icao: 'LEPA', lat: 39.552, lng: 2.739 },
+  { icao: 'LPPT', lat: 38.774, lng: -9.134 },
+  { icao: 'LIRF', lat: 41.800, lng: 12.239 },
+  { icao: 'LIMC', lat: 45.630, lng: 8.723 },
+  { icao: 'LSZH', lat: 47.465, lng: 8.549 },
+  { icao: 'LOWW', lat: 48.110, lng: 16.570 },
+  { icao: 'LKPR', lat: 50.101, lng: 14.260 },
+  { icao: 'EPWA', lat: 52.166, lng: 20.967 },
+  { icao: 'LHBP', lat: 47.437, lng: 19.256 },
+  { icao: 'LGAV', lat: 37.936, lng: 23.947 },
+  { icao: 'LTFM', lat: 41.262, lng: 28.742 },
+  { icao: 'EKCH', lat: 55.618, lng: 12.656 },
+  { icao: 'ESSA', lat: 59.652, lng: 17.919 },
+  { icao: 'ENGM', lat: 60.194, lng: 11.100 },
+  { icao: 'EFHK', lat: 60.317, lng: 24.963 },
+  { icao: 'EDDB', lat: 52.362, lng: 13.501 },
+  { icao: 'EDDH', lat: 53.630, lng: 9.988 },
+  { icao: 'EDDM', lat: 48.354, lng: 11.786 },
+  { icao: 'EDDF', lat: 50.033, lng: 8.571 },
+  { icao: 'EDDL', lat: 51.289, lng: 6.767 },
+  { icao: 'OMDB', lat: 25.253, lng: 55.364 },
+  { icao: 'HECA', lat: 30.122, lng: 31.406 },
+  { icao: 'GMMN', lat: 33.367, lng: -7.590 },
+  { icao: 'KJFK', lat: 40.640, lng: -73.779 },
+  { icao: 'KORD', lat: 41.978, lng: -87.905 },
+  { icao: 'CYYZ', lat: 43.677, lng: -79.631 },
+  { icao: 'SBGR', lat: -23.435, lng: -46.473 },
+  { icao: 'VIDP', lat: 28.567, lng: 77.103 },
+  { icao: 'VHHH', lat: 22.309, lng: 113.915 },
+  { icao: 'RJTT', lat: 35.552, lng: 139.780 },
+  { icao: 'FAOR', lat: -26.139, lng: 28.246 },
+];

@@ -73,8 +73,8 @@ export function AircraftStrip({ aircraft, selectedId, onSelect }: Props) {
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 3, fontSize: 11, color: '#888', alignItems: 'center' }}>
               <span style={{ color: '#aaa' }}>{ac.type}</span>
-              {/* Übernommener echter Flieger: Startplatz in der Farbe der echten Anflüge */}
-              {ac.origin && <span style={{ color: '#78d7ff' }} title="Startplatz (echter Flug)">{ac.origin}</span>}
+              {/* Startplatz; bei übernommenen echten Fliegern in der Farbe der echten Anflüge */}
+              {ac.origin && <span style={{ color: ac.liveHex ? '#78d7ff' : '#aaa' }} title={ac.liveHex ? 'Startplatz (echter Flug)' : 'Startplatz'}>{ac.origin}</span>}
               {wake === 'H' && (
                 <span style={{ color: '#000', background: '#ffaa00', padding: '0px 4px', borderRadius: 2, fontSize: 9, fontWeight: 'bold', letterSpacing: 0.5 }}>H</span>
               )}

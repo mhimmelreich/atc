@@ -10,7 +10,8 @@ import {
   goAroundCall, endOfStarCall, sayAgainCall, pilotVoice, APPROACH_VOICE, TOWER_VOICE, type Phrase, type RadioContext,
 } from './Phraseology';
 import { distanceNM, destinationPoint, bearingBetween } from '@/utils/geo';
-import { normaliseHdg } from '@/utils/aviation';
+import { normaliseHdg, headingDiff } from '@/utils/aviation';
+import { ORIGINS } from './origins';
 import {
   SEP_LATERAL_NM, SEP_VERTICAL_FT,
   WARN_LATERAL_NM, WARN_VERTICAL_FT,
@@ -47,6 +48,10 @@ const FINAL_ZONE_NM = 15;
 // Nach der Übergabe meldet sich der Pilot nach dem Frequenzwechsel beim Turm
 const TOWER_CALL_MIN_S = 3;
 const TOWER_CALL_MAX_S = 6;
+// SIM-Startplätze: nicht zu nah am Zielplatz
+const ORIGIN_MIN_NM = 150;
+// Bahnwechsel: neue STAR nur über einen Punkt in diesem Umkreis vor dem Flieger
+const RESTAR_SEARCH_NM = 40;
 
 interface SpawnCandidate {
   lat: number;
@@ -54,6 +59,7 @@ interface SpawnCandidate {
   initHdg: number;
   initAlt: number;
   starId?: string;
+  origin?: string;
 }
 
 export class AircraftManager {
@@ -114,6 +120,38 @@ export class AircraftManager {
 
   setSpawnStars(stars: STAR[]): void {
     this.spawnStars = stars;
+  }
+
+  /**
+   * Bahnwechsel: Flieger auf einer STAR der alten Richtung bekommen eine STAR der neuen,
+   * möglichst über einen Punkt, den sie ohnehin noch anfliegen ("proceed direct …, then … arrival").
+   */
+  reassignStars(stars: STAR[], timeScale = 1): void {
+    const ids = new Set(stars.map((s) => s.id));
+    for (const ac of this.aircraft.values()) {
+      if (ac.state !== 'enroute' || ac.clearedILS || ac.directTo || ac.tower || !ac.starId || ids.has(ac.starId)) continue;
+      if (this.pendingCommands.some((c) => c.id === ac.id && c.cmd.type === 'star')) continue;
+      const old = this.stars.find((s) => s.id === ac.starId);
+      const remaining = old?.waypoints.slice(ac.starLegIndex ?? 0) ?? [];
+      let pick: { starId: string; waypointId: string } | undefined;
+      // Erster noch anzufliegender Punkt, auf dem auch eine neue STAR liegt
+      for (const wp of remaining) {
+        const st = stars.find((s) => s.waypoints.some((w) => w.id === wp.id));
+        if (st) { pick = { starId: st.id, waypointId: wp.id }; break; }
+      }
+      // Sonst der nächste Punkt einer neuen STAR vor dem Flieger
+      if (!pick) {
+        let best = RESTAR_SEARCH_NM;
+        for (const st of stars) {
+          for (const w of st.waypoints) {
+            const dist = distanceNM(ac.lat, ac.lng, w.lat, w.lng);
+            const ahead = Math.abs(headingDiff(ac.headingDeg, bearingBetween(ac.lat, ac.lng, w.lat, w.lng))) < 90;
+            if (ahead && dist < best) { best = dist; pick = { starId: st.id, waypointId: w.id }; }
+          }
+        }
+      }
+      if (pick) this.applyCommand(ac.id, { type: 'star', ...pick }, timeScale);
+    }
   }
 
   setSpawning(enabled: boolean): void {
@@ -457,10 +495,14 @@ export class AircraftManager {
     const airport = this.airport!;
     let lat: number, lng: number, initHdg: number;
     let star: STAR | undefined;
+    // Startplatz würfeln; er bestimmt die Richtung, aus der der Flieger kommt
+    const origins = ORIGINS.filter((o) => o.icao !== airport.icao && distanceNM(o.lat, o.lng, airport.lat, airport.lng) >= ORIGIN_MIN_NM);
+    const origin = origins.length > 0 ? origins[Math.floor(Math.random() * origins.length)] : undefined;
 
     if (this.spawnStars.length > 0) {
-      // Pick a random STAR and spawn 15–20 NM before its entry fix
-      star = this.spawnStars[Math.floor(Math.random() * this.spawnStars.length)];
+      // Einflugpunkt in Richtung des Startplatzes, davon eine STAR der aktiven Bahnen; Start 15–20 NM davor
+      star = origin ? this.starFrom(bearingBetween(airport.lat, airport.lng, origin.lat, origin.lng)) : undefined;
+      star ??= this.spawnStars[Math.floor(Math.random() * this.spawnStars.length)];
       const entryFix = star.waypoints[0];
       const nextFix = star.waypoints[1] ?? { lat: airport.lat, lng: airport.lng };
       // Inbound track: entry → next; spawn on reciprocal (behind the fix)
@@ -471,7 +513,7 @@ export class AircraftManager {
       lng = spawnPos.lng;
       initHdg = Math.round(bearingBetween(lat, lng, entryFix.lat, entryFix.lng));
     } else {
-      const pos = this.randomEntryPoint();
+      const pos = this.randomEntryPoint(origin && bearingBetween(airport.lat, airport.lng, origin.lat, origin.lng));
       lat = pos.lat;
       lng = pos.lng;
       initHdg = Math.round(bearingBetween(lat, lng, airport.lat, airport.lng));
@@ -483,7 +525,20 @@ export class AircraftManager {
       ? firstAltRestr + Math.floor(Math.random() * 2000)
       : 10000 + Math.floor(Math.random() * 8000);
 
-    return { lat, lng, initHdg, initAlt, starId: star?.id };
+    return { lat, lng, initHdg, initAlt, starId: star?.id, origin: origin?.icao };
+  }
+
+  /** STAR der aktiven Bahnen, deren Einflugpunkt am besten in Richtung des Startplatzes liegt */
+  private starFrom(bearing: number): STAR | undefined {
+    const airport = this.airport!;
+    const offset = (st: STAR) => {
+      const fix = st.waypoints[0];
+      return fix ? Math.abs(headingDiff(bearing, bearingBetween(airport.lat, airport.lng, fix.lat, fix.lng))) : Infinity;
+    };
+    const best = Math.min(...this.spawnStars.map(offset));
+    if (!Number.isFinite(best)) return undefined;
+    const fitting = this.spawnStars.filter((st) => offset(st) - best < 1);
+    return fitting[Math.floor(Math.random() * fitting.length)];
   }
 
   /** ≥ 1, wenn der Kandidat zu allen Flugzeugen seitlich oder vertikal genug Abstand hat */
@@ -511,7 +566,7 @@ export class AircraftManager {
     }
     // Kein freier Einstieg → später erneut versuchen statt einen Konflikt zu erzeugen
     if (!spawn || bestSep < 1) return false;
-    const { lat, lng, initHdg, initAlt, starId } = spawn;
+    const { lat, lng, initHdg, initAlt, starId, origin } = spawn;
     const starLegIndex = 0;
 
     const types = Object.keys(AIRCRAFT_TYPES);
@@ -537,6 +592,7 @@ export class AircraftManager {
       clearedILS: false,
       starId,
       starLegIndex,
+      origin,
     });
 
     this.aircraft.set(id, ac);
@@ -544,9 +600,9 @@ export class AircraftManager {
     return true;
   }
 
-  private randomEntryPoint(): { lat: number; lng: number } {
+  private randomEntryPoint(towards?: number): { lat: number; lng: number } {
     if (!this.airport) return { lat: 0, lng: 0 };
-    const bearing = Math.random() * 360;
+    const bearing = towards !== undefined ? towards + (Math.random() - 0.5) * 30 : Math.random() * 360;
     const dist = SPAWN_DISTANCE_NM * (0.55 + Math.random() * 0.45);
     return destinationPoint(this.airport.lat, this.airport.lng, bearing, dist);
   }

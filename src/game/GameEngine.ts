@@ -421,6 +421,7 @@ export class GameEngine {
     if (changed) {
       this.manager.setSpawnStars(this.activeStars());
       this.manager.info(`Landerichtung ${ids.join(' ')} (${reason})`);
+      this.manager.reassignStars(this.activeStars(), this.state.timeScale);
     }
     this.trySave();
   }
@@ -502,6 +503,7 @@ export class GameEngine {
     // Von Hand gewählt: keine automatische Umstellung mehr, bis AUTO gedrückt wird
     this.state = { ...this.state, activeRunwayIds: next, runwaySource: 'manual' };
     this.manager.setSpawnStars(this.activeStars());
+    this.manager.reassignStars(this.activeStars(), this.state.timeScale);
     this.trySave();
   }
 

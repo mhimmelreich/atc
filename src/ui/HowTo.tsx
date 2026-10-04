@@ -107,6 +107,7 @@ function Approach() {
       </Phase>
       <Phase n={2} title="Anflugstrecke (STAR)">
         <P>Der Flieger folgt der STAR mit ihren Höhen- und Geschwindigkeitsvorgaben. Du gibst den Sinkflug frei, kürzt per Direct-to ab oder weist eine andere STAR zu. Unter FL100 sind höchstens 250 kt üblich.</P>
+        <P>Welche STAR ein Flieger fliegt, ergibt sich wie in echt aus seinem Einflugpunkt (der Richtung, aus der er kommt; Startplatz im Flugstreifen) und der Landerichtung. Wechselt die Landerichtung, weist das Spiel den Fliegern auf einer STAR die passende neue STAR zu.</P>
         <P>Unterhalb der <B>Übergangshöhe</B> (in Deutschland meist 5000 ft) gibt es keine Flugflächen mehr, sondern Höhen über dem Meer. Mit der ersten Höhe darunter nennst du das QNH (Luftdruck).</P>
         <Radio lines={[
           ['APP', 'Lufthansa 427, proceed direct KERAX, then KERAX 6A arrival, expect runway 25R'],
