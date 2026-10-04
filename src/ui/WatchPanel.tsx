@@ -1,5 +1,6 @@
 // filepath: src/ui/WatchPanel.tsx
 // WATCH: echter Verkehr zum Zuschauen – gewählter Flieger mit allen Daten, darunter alle Flieger nach Entfernung
+import { useState } from 'react';
 import type { Airport } from '@/types/airport';
 import type { LiveAircraft, LiveInbound } from '@/types/live';
 import { bearingBetween, distanceNM } from '@/utils/geo';
@@ -12,6 +13,10 @@ interface Props {
   spectator: { lat: number; lng: number } | null;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** Suchtreffer: auswählen und ins Bild holen */
+  onFocus: (ac: LiveAircraft) => void;
+  /** Hinweis, wenn die vergangene Flugbahn fehlt */
+  traceStatus: string | null;
 }
 
 const MAX_LIST = 40;
@@ -22,11 +27,18 @@ const roleText = (r?: LiveInbound) => (r?.out ? `→ ${r.dest ?? '?'}` : r ? `${
 const fl = (ft: number | null) => (ft === null ? '---' : ft < 6000 ? `${Math.round(ft / 100) * 100} ft` : `FL${Math.round(ft / 100).toString().padStart(3, '0')}`);
 const vsArrow = (vs: number | null) => ((vs ?? 0) > 300 ? '↑' : (vs ?? 0) < -300 ? '↓' : '→');
 
-export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, onSelect }: Props) {
+/** Treffer für die Suche: Rufzeichen, Kennzeichen, Typ, Route oder hex */
+const matches = (ac: LiveAircraft, q: string) =>
+  [ac.callsign, ac.reg, ac.type, ac.route, ac.hex].some((v) => v?.toUpperCase().includes(q));
+
+export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, onSelect, onFocus, traceStatus }: Props) {
+  const [query, setQuery] = useState('');
+  const q = query.trim().toUpperCase();
   // Entfernung vom Zuschauer: GPS-Standort oder der Platz
   const center = spectator ?? airport;
   const dist = (ac: LiveAircraft) => (center ? distanceNM(center.lat, center.lng, ac.lat, ac.lng) : 0);
-  const list = [...aircraft].sort((a, b) => dist(a) - dist(b)).slice(0, MAX_LIST);
+  const found = q ? aircraft.filter((ac) => matches(ac, q)) : aircraft;
+  const list = [...found].sort((a, b) => dist(a) - dist(b)).slice(0, MAX_LIST);
   const sel = aircraft.find((ac) => `live-${ac.hex}` === selectedId);
 
   return (
@@ -35,13 +47,23 @@ export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, on
       {sel ? <Details ac={sel} role={roles[sel.hex]} airport={airport} spectator={spectator} /> : (
         <div style={{ color: '#446644', fontSize: 11, padding: '4px 0' }}>Flieger auf dem Radar oder in der Liste anklicken</div>
       )}
+      {sel && traceStatus && <div style={{ color: '#ffaa00', fontSize: 10 }}>{traceStatus}</div>}
+
+      <input
+        value={query}
+        placeholder="SUCHE: Rufzeichen, Kennzeichen, Typ, Route"
+        spellCheck={false}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && list[0]) onFocus(list[0]); if (e.key === 'Escape') setQuery(''); }}
+        style={{ background: '#0a1a0a', border: '1px solid #1a4428', color: '#00ff88', fontFamily: '"Courier New", monospace', fontSize: 11, padding: '4px 6px', outline: 'none', textTransform: 'uppercase' }}
+      />
 
       <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, display: 'flex', justifyContent: 'space-between' }}>
-        <span>LIVE TRAFFIC ({aircraft.length})</span>
+        <span>LIVE TRAFFIC ({q ? `${found.length}/${aircraft.length}` : aircraft.length})</span>
         <span><span style={{ color: COLOR.in }}>■ IN</span> <span style={{ color: COLOR.out }}>■ OUT</span></span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto', flex: 1, minHeight: 110 }}>
-        {list.length === 0 && <div style={{ color: '#446644', fontSize: 11, textAlign: 'center', paddingTop: 16 }}>NO TRAFFIC</div>}
+        {list.length === 0 && <div style={{ color: '#446644', fontSize: 11, textAlign: 'center', paddingTop: 16 }}>{q ? 'KEIN TREFFER' : 'NO TRAFFIC'}</div>}
         {list.map((ac) => {
           const id = `live-${ac.hex}`;
           const role = roles[ac.hex];
@@ -49,7 +71,7 @@ export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, on
           return (
             <div
               key={ac.hex}
-              onClick={() => onSelect(id)}
+              onClick={() => (q ? onFocus(ac) : onSelect(id))}
               style={{
                 display: 'grid', gridTemplateColumns: '1fr 60px 42px', gap: 4, alignItems: 'baseline',
                 padding: '3px 6px', fontSize: 11, cursor: 'pointer', userSelect: 'none', borderRadius: 2,

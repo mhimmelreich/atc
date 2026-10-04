@@ -191,6 +191,23 @@ export class Scene3DRenderer {
 
     this.sampleTrails(o);
     this.drawConflicts(o);
+    if (o.track && o.live) {
+      // Bisherige Flugbahn in ihrer Höhe, mit Loten alle paar Punkte
+      const now = o.live.aircraft.find((a) => a.hex === o.track!.hex);
+      const pts = [...o.track.points, ...(now ? [now] : [])];
+      const vs = pts.map((p) => this.world(p.lat, p.lng, p.altFt ?? 0));
+      this.ctx.strokeStyle = 'rgba(255,120,220,0.8)';
+      this.ctx.lineWidth = 1.5;
+      this.ctx.beginPath();
+      this.polyline(vs);
+      this.ctx.stroke();
+      this.ctx.strokeStyle = 'rgba(255,120,220,0.15)';
+      this.ctx.lineWidth = 1;
+      this.ctx.beginPath();
+      const every = Math.max(1, Math.round(pts.length / 40));
+      pts.forEach((p, i) => { if (i % every === 0) this.line(vs[i], this.world(p.lat, p.lng, 0)); });
+      this.ctx.stroke();
+    }
     if (o.spectator) {
       const p = this.proj(this.world(o.spectator.lat, o.spectator.lng, 0));
       if (p) drawSpectator(this.ctx, p);

@@ -56,6 +56,7 @@ const C = {
   LIVE_TRAIL:       'rgba(150,170,160,',
   LIVE_INBOUND:     'rgba(120,215,255,0.95)',
   LIVE_OUTBOUND:    'rgba(255,190,90,0.95)',
+  TRACK:            'rgba(255,120,220,0.75)',
 };
 
 // Echte Flieger: Beschriftung nur unterhalb dieser Höhe (darüber Überflieger ohne Bezug zum Platz)
@@ -97,6 +98,8 @@ export interface RenderOptions {
   activeRunwayIds: string[];
   /** Echte Flieger (LIVE), nicht gelotst; inbound: Anflüge zum Platz, die man übernehmen kann (hex → Info) */
   live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]>; inbound: Map<string, LiveInbound> };
+  /** WATCH: vergangene Flugbahn des gewählten Fliegers */
+  track?: { hex: string; points: Array<{ lat: number; lng: number; altFt: number | null }> } | null;
   /** WATCH: Standort des Zuschauers (GPS) */
   spectator?: { lat: number; lng: number } | null;
 }
@@ -207,6 +210,16 @@ export class RadarRenderer {
     }
 
     if (opts.spectator) drawSpectator(ctx, ll2c(opts.spectator.lat, opts.spectator.lng));
+    if (opts.track && opts.live) {
+      // Bisherige Flugbahn bis zur aktuellen Position
+      const now = opts.live.aircraft.find((a) => a.hex === opts.track!.hex);
+      const pts = [...opts.track.points, ...(now ? [now] : [])].map((p) => ll2c(p.lat, p.lng));
+      ctx.strokeStyle = C.TRACK;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+      ctx.stroke();
+    }
     if (opts.live) this.drawLive(opts.live, ll2c, W, H, opts.trailLength, opts.display.labels, opts.now, opts.selectedId);
 
     for (const ac of opts.aircraft) this.drawTrail(ac, ll2c, opts.trailLength);

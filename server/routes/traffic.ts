@@ -217,4 +217,80 @@ router.get('/', async (req, res) => {
   });
 });
 
+// ── Vergangene Flugbahn eines Fliegers (WATCH) ─────────────────────────────
+// Spur des laufenden Flugs aus den Trace-Dateien von adsb.lol (dieselben Daten, ODbL): der ganze Tag
+// (trace_full, wird seltener erneuert) plus die letzten Minuten (trace_recent). Nur auf Klick, 60 s zwischengespeichert.
+const TRACE_URL = 'https://adsb.lol/data/traces';
+const TRACE_TTL_MS = 60_000;
+const TRACE_MAX_POINTS = 800;
+const TRACE_PER_MIN = 30;
+const traces = new Map<string, { at: number; points: TracePoint[] }>();
+let traceCalls: number[] = [];
+
+/** [lat, lng, altFt (null am Boden), Zeitpunkt in ms] */
+type TracePoint = [number, number, number | null, number];
+
+interface TraceFile {
+  timestamp: number;
+  trace: Array<[number, number, number, number | 'ground' | null, number | null, number | null, number, ...unknown[]]>;
+}
+
+async function fetchTrace(hex: string, kind: 'full' | 'recent'): Promise<TraceFile | null> {
+  const res = await fetch(`${TRACE_URL}/${hex.slice(-2)}/trace_${kind}_${hex}.json`, {
+    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`adsb.lol trace HTTP ${res.status}`);
+  return res.json() as Promise<TraceFile>;
+}
+
+/** Punkte ab dem Beginn des letzten Flugabschnitts (readsb: Flag 2 = neuer Abschnitt) */
+function currentLeg(files: Array<TraceFile | null>): TracePoint[] {
+  const all: Array<{ ts: number; p: TracePoint; newLeg: boolean }> = [];
+  for (const f of files) {
+    if (!f) continue;
+    for (const t of f.trace) {
+      const ts = (f.timestamp + t[0]) * 1000;
+      const alt = typeof t[3] === 'number' ? t[3] : null;
+      all.push({ ts, p: [t[1], t[2], alt, Math.round(ts)], newLeg: (t[6] & 2) !== 0 });
+    }
+  }
+  all.sort((a, b) => a.ts - b.ts);
+  const dedup = all.filter((x, i) => i === 0 || x.ts > all[i - 1].ts);
+  let start = 0;
+  dedup.forEach((x, i) => { if (x.newLeg) start = i; });
+  let leg = dedup.slice(start).map((x) => x.p);
+  // Am Boden vor dem Start abschneiden: Spur beginnt mit dem Abheben (bzw. dem ersten Punkt in der Luft davor)
+  const firstAir = leg.findIndex((p) => p[2] !== null);
+  if (firstAir > 1) leg = leg.slice(firstAir - 1);
+  if (leg.length > TRACE_MAX_POINTS) {
+    const step = leg.length / TRACE_MAX_POINTS;
+    leg = Array.from({ length: TRACE_MAX_POINTS }, (_, i) => leg[Math.floor(i * step)]).concat([leg[leg.length - 1]]);
+  }
+  return leg;
+}
+
+router.get('/trace/:hex', async (req, res) => {
+  const hex = req.params.hex.toLowerCase();
+  if (!/^~?[0-9a-f]{6}$/.test(hex)) { res.status(400).json({ error: 'Ungültige Kennung' }); return; }
+  const now = Date.now();
+  const hit = traces.get(hex);
+  if (hit && now - hit.at < TRACE_TTL_MS) { res.json({ points: hit.points }); return; }
+  traceCalls = traceCalls.filter((t) => now - t < 60_000);
+  if (traceCalls.length >= TRACE_PER_MIN) { res.status(429).json({ error: 'Zu viele Abfragen' }); return; }
+  traceCalls.push(now);
+  try {
+    const files = await Promise.all([fetchTrace(hex, 'full'), fetchTrace(hex, 'recent')]);
+    const points = currentLeg(files);
+    for (const [k, v] of traces) if (now - v.at > TRACE_TTL_MS) traces.delete(k);
+    traces.set(hex, { at: now, points });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ points });
+  } catch (err) {
+    console.error('trace:', (err as Error).message);
+    res.status(503).json({ error: 'Flugbahn nicht verfügbar' });
+  }
+});
+
 export default router;

@@ -142,6 +142,7 @@ export class GameEngine {
   private takenOver = new Set<string>();             // hex der übernommenen echten Flieger
   private liveFrame: LiveAircraft[] = [];            // echte Flieger im letzten Bild (für Klicks)
   private liveFinals = new Map<string, { heading: number; at: number }>(); // hex → Bahnkurs, zuletzt im Endanflug gesehen
+  private track: RenderOptions['track'] = null;                            // WATCH: Flugbahn des gewählten Fliegers
   private liveDepartures = new Map<string, number>();                       // WATCH: hex → zuletzt beim Start gesehen
   private liveOutbound = new Map<string, string | undefined>();              // WATCH: hex → Zielplatz der Abflüge
 
@@ -415,6 +416,7 @@ export class GameEngine {
           activeRunwayIds: this.state.activeRunwayIds,
           live: this.liveMode ? { aircraft: live, trails: this.liveTrails, inbound: roles } : undefined,
           spectator: this.watching ? this.state.spectator : null,
+          track: this.watching && this.track && selectedId === liveId(this.track.hex) ? this.track : null,
         };
         if (this.view3D && this.scene3d) this.scene3d.render(opts, this.camera);
         else this.renderer.render(opts);
@@ -483,6 +485,12 @@ export class GameEngine {
   resetCamera(): void { this.camera = { ...DEFAULT_CAMERA }; }
 
   /** WATCH: Standort des Zuschauers (GPS) setzen oder löschen (dann gilt der gewählte Platz) */
+  /** WATCH: vergangene Flugbahn des gewählten Fliegers (null: keine) */
+  setTrack(track: RenderOptions['track']): void { this.track = track ?? null; }
+
+  /** Blick auf einen Punkt richten (z. B. Suchtreffer) */
+  centerOn(lat: number, lng: number): void { this.viewLat = lat; this.viewLng = lng; }
+
   setSpectator(pos: Spectator | null): void {
     this.state = { ...this.state, spectator: pos };
     const center = pos ?? this.airport;

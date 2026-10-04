@@ -19,7 +19,7 @@ import { StationPanel } from './StationPanel';
 import { WatchPanel } from './WatchPanel';
 import { RadioVoice } from '@/services/RadioVoice';
 import { loadTelephony } from '@/game/Telephony';
-import { fetchLiveTraffic, LIVE_POLL_MS } from '@/services/LiveTrafficService';
+import { fetchLiveTraffic, fetchTrace, LIVE_POLL_MS } from '@/services/LiveTrafficService';
 import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
 import type { TrafficMode } from '@/types/live';
 
@@ -251,6 +251,29 @@ export function App() {
     const id = setInterval(poll, LIVE_POLL_MS);
     return () => { stopped = true; clearInterval(id); };
   }, [gameState.trafficMode, airport, spectator]);
+
+  // ── WATCH: vergangene Flugbahn des gewählten Fliegers, jede Minute nachgeladen ──
+  const traceHex = watching && gameState.selectedId?.startsWith('live-') ? gameState.selectedId.slice(5) : null;
+  const [traceStatus, setTraceStatus] = useState<string | null>(null);
+  useEffect(() => {
+    engineRef.current?.setTrack(null);
+    setTraceStatus(null);
+    if (!traceHex) return;
+    let stopped = false;
+    const load = async () => {
+      try {
+        const points = await fetchTrace(traceHex);
+        if (stopped) return;
+        engineRef.current?.setTrack({ hex: traceHex, points });
+        setTraceStatus(points.length ? null : 'keine Flugbahn bekannt');
+      } catch {
+        if (!stopped) setTraceStatus('Flugbahn nicht verfügbar');
+      }
+    };
+    void load();
+    const id = setInterval(load, 60_000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [traceHex]);
 
   // ── Wetter: METAR beim Laden des Platzes, dann alle 10 Minuten ──
   useEffect(() => {
@@ -536,7 +559,8 @@ export function App() {
       {watching ? (
         <WatchPanel
           aircraft={gameState.watch} roles={gameState.watchRoles} airport={airport} spectator={gameState.spectator}
-          selectedId={gameState.selectedId} onSelect={handleSelectAircraft}
+          selectedId={gameState.selectedId} onSelect={handleSelectAircraft} traceStatus={traceStatus}
+          onFocus={(ac) => { handleSelectAircraft(`live-${ac.hex}`); engineRef.current?.centerOn(ac.lat, ac.lng); }}
         />
       ) : (<>
       {/* Alerts */}
