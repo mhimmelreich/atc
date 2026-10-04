@@ -4,6 +4,7 @@ import type { Aircraft, ATCCommand, ConflictPair } from '@/types/aircraft';
 import type { Waypoint, STAR } from '@/types/navdata';
 import { AircraftManager } from './AircraftManager';
 import { RadarRenderer, DEFAULT_DISPLAY, type DisplayOptions } from './RadarRenderer';
+import { headingDiff } from '@/utils/aviation';
 import { SCORE_LANDING, SCORE_GOAROUND, SCORE_SEPARATION_VIOLATION, SCORE_COLLISION } from './constants';
 
 export interface GameState {
@@ -236,7 +237,17 @@ export class GameEngine {
 
   toggleActiveRunway(id: string): void {
     const ids = this.state.activeRunwayIds;
-    const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
+    let next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
+    const rwy = this.airport?.runways.find((r) => r.id === id);
+    const opposite = (x: string) => {
+      const o = this.airport?.runways.find((r) => r.id === x);
+      return !!(o && rwy && Math.abs(headingDiff(o.heading, rwy.heading)) > 90);
+    };
+    if (!ids.includes(id) && ids.some(opposite)) {
+      // Betriebsrichtungswechsel: Bahnen der Gegenrichtung auf ihre Gegenbahn umstellen, keine gemischten Richtungen
+      const flipped = ids.map((x) => (opposite(x) ? this.airport!.runways.find((r) => r.id === x)!.recipId : x));
+      next = [...new Set([...flipped, id])];
+    }
     this.state = { ...this.state, activeRunwayIds: next };
     this.manager.setSpawnStars(this.activeStars());
     this.trySave();

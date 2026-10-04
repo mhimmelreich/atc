@@ -125,7 +125,7 @@ function ilsCategory(perf: string): ILSData['category'] {
 function loadStars(d: DatabaseSync, airport: Airport, waypoints: Map<string, Waypoint>): STAR[] {
   const icao = airport.icao;
   const procs = d.prepare(
-    `SELECT approach_id, fix_ident, runway_name
+    `SELECT approach_id, fix_ident, runway_name, arinc_name
        FROM approach WHERE airport_ident = ? AND type = 'GPS' AND suffix = 'A'
       ORDER BY fix_ident, runway_name`,
   ).all(icao) as Row[];
@@ -139,7 +139,6 @@ function loadStars(d: DatabaseSync, airport: Airport, waypoints: Map<string, Way
   const stars: STAR[] = [];
   for (const p of procs) {
     const name = str(p.fix_ident);
-    const runway = str(p.runway_name) || 'ALL';
     const pts: Waypoint[] = [];
     const legs: STARLeg[] = [];
     for (const l of legStmt.all(num(p.approach_id)) as Row[]) {
@@ -164,9 +163,23 @@ function loadStars(d: DatabaseSync, airport: Airport, waypoints: Map<string, Way
     }
     if (pts.length < 2) continue;
     for (const wp of pts) waypoints.set(wp.id, wp);
-    stars.push({ id: `${name}/${runway}`, name, icao, runway, waypoints: pts, legs });
+    for (const runway of starRunways(p, airport)) {
+      stars.push({ id: `${name}/${runway}`, name, icao, runway, waypoints: pts, legs });
+    }
   }
   return stars;
+}
+
+// Bahnen einer STAR: runway_name, sonst ARINC "RW26B" (= alle Parallelbahnen 26), sonst "ALL"
+function starRunways(p: Row, airport: Airport): string[] {
+  const rwy = str(p.runway_name);
+  if (rwy) return [rwy];
+  const both = /^RW(\d{2})B$/.exec(str(p.arinc_name));
+  if (both) {
+    const ids = airport.runways.map((r) => r.id).filter((id) => /^\d{2}[LRC]?$/.test(id) && id.startsWith(both[1]));
+    if (ids.length > 0) return ids;
+  }
+  return ['ALL'];
 }
 
 function distanceNM(lat1: number, lng1: number, lat2: number, lng2: number): number {
