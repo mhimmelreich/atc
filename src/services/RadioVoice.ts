@@ -32,6 +32,7 @@ function driveCurve(amount: number): Float32Array<ArrayBuffer> {
 export class RadioVoice {
   private ctx: AudioContext | null = null;
   private noise: AudioBuffer | null = null;
+  private clickSound: AudioBuffer | null = null;
   private queue: RadioMessage[] = [];
   private buffers = new Map<number, Promise<AudioBuffer | null>>();
   private playing = false;
@@ -156,6 +157,10 @@ export class RadioVoice {
       .connect(hiss)
       .connect(out);
 
+    // Klick der Sendetaste: leise beim Drücken, deutlich beim Loslassen
+    this.click(ctx, out, t0 - 0.05, 0.25);
+    this.click(ctx, out, end, 0.6);
+
     noise.start(t0 - 0.05);
     voice.start(t0);
     noise.stop(end + 0.03 + tail);
@@ -169,6 +174,29 @@ export class RadioVoice {
         try { voice.stop(); noise.stop(); } catch { /* schon beendet */ }
       };
     });
+  }
+
+  private click(ctx: AudioContext, out: AudioNode, at: number, level: number): void {
+    const src = ctx.createBufferSource();
+    src.buffer = this.clickBuffer(ctx);
+    const gain = ctx.createGain();
+    gain.gain.value = level;
+    src.connect(biquad(ctx, 'highpass', 400, 0.7)).connect(gain).connect(out);
+    src.start(at);
+  }
+
+  /** Kurzer Knack (etwa 6 ms): Rechteckimpuls mit Rauschen, schnell abklingend */
+  private clickBuffer(ctx: AudioContext): AudioBuffer {
+    if (!this.clickSound) {
+      const len = Math.round(ctx.sampleRate * 0.006);
+      this.clickSound = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = this.clickSound.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        const decay = Math.exp(-i / (len / 5));
+        data[i] = ((i < len / 12 ? 1 : 0) + (Math.random() * 2 - 1) * 0.6) * decay;
+      }
+    }
+    return this.clickSound;
   }
 
   private noiseBuffer(ctx: AudioContext): AudioBuffer {
