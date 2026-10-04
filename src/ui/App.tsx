@@ -1,6 +1,6 @@
 // filepath: src/ui/App.tsx
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { GameEngine, type GameState, type SessionData, type DisplayOptions } from '@/game/GameEngine';
+import { GameEngine, type GameState, type SessionData, type DisplayOptions, type RunwaySource } from '@/game/GameEngine';
 import { DEFAULT_DISPLAY } from '@/game/RadarRenderer';
 import { fetchAirportData, AVAILABLE_AIRPORTS, type AirportSource, type SourcePreference } from '@/services/AirportDataService';
 import { fetchNavStatus } from '@/services/NavigraphService';
@@ -15,9 +15,11 @@ import { ScorePanel } from './ScorePanel';
 import { ContextMenu, type ContextMenuState } from './ContextMenu';
 import { RadioLog } from './RadioLog';
 import { HowTo } from './HowTo';
+import { StationPanel } from './StationPanel';
 import { RadioVoice } from '@/services/RadioVoice';
 import { loadTelephony } from '@/game/Telephony';
 import { fetchLiveTraffic, LIVE_POLL_MS } from '@/services/LiveTrafficService';
+import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
 import type { TrafficMode } from '@/types/live';
 
 const SIDEBAR_W = 288;
@@ -33,6 +35,12 @@ const SOURCE_NAMES: Record<AirportSource, string> = {
   navdata: 'Navigraph', open: 'OurAirports', generic: 'generisch',
 };
 const RADIO_STORAGE = 'atc-radio';
+const RUNWAY_SOURCES: Record<RunwaySource, { label: string; title: string }> = {
+  default: { label: 'AUTO', title: 'Automatisch: nach dem Wind (METAR) und bei LIVE nach den echten Landungen' },
+  wind:    { label: 'AUTO · WIND', title: 'Automatisch nach dem Wind (METAR)' },
+  live:    { label: 'AUTO · LIVE', title: 'Automatisch nach den echten Landungen' },
+  manual:  { label: 'MANUELL', title: 'Von Hand gewählt. Klick: wieder automatisch' },
+};
 const TRAFFIC_OPTIONS: Array<{ id: TrafficMode; label: string; title: string }> = [
   { id: 'sim',  label: 'SIM',  title: 'Erfundener Verkehr zum Lotsen' },
   { id: 'live', label: 'LIVE', title: 'Echte Flieger von adsb.lol' },
@@ -71,6 +79,7 @@ export function App() {
     pendingCmdTypes: {}, display: { ...DEFAULT_DISPLAY },
     activeRunwayIds: [], radio: [],
     trafficMode: 'sim', live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {},
+    weather: null, runwaySource: 'default',
   });
   const [airport, setAirport] = useState<Airport | null>(null);
   const [navPoints, setNavPoints] = useState<Waypoint[]>([]);
@@ -196,6 +205,20 @@ export function App() {
     const id = setInterval(poll, LIVE_POLL_MS);
     return () => { stopped = true; clearInterval(id); };
   }, [gameState.trafficMode, airport]);
+
+  // ── Wetter: METAR beim Laden des Platzes, dann alle 10 Minuten ──
+  useEffect(() => {
+    if (!airport) return;
+    let stopped = false;
+    const poll = async () => {
+      const weather = await fetchWeather(airport.icao);
+      // Fehlschlag: letzten Stand behalten
+      if (!stopped && weather) engineRef.current?.setWeather(weather);
+    };
+    void poll();
+    const id = setInterval(poll, WEATHER_POLL_MS);
+    return () => { stopped = true; clearInterval(id); };
+  }, [airport]);
 
   const handleCommand = useCallback((id: string, cmd: ATCCommand) => {
     engineRef.current?.applyCommand(id, cmd);
@@ -343,7 +366,20 @@ export function App() {
         if (ilsRunways.length === 0) return null;
         return (
           <div>
-            <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4 }}>ACTIVE RWY</div>
+            <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
+              <span>ACTIVE RWY</span>
+              {/* Herkunft der Landerichtung; nach Handwahl schaltet ein Klick zurück auf automatisch */}
+              <span
+                title={RUNWAY_SOURCES[gameState.runwaySource].title}
+                onClick={() => gameState.runwaySource === 'manual' && engineRef.current?.setRunwayAuto()}
+                style={{
+                  color: gameState.runwaySource === 'manual' ? '#ffaa00' : '#00ff88',
+                  cursor: gameState.runwaySource === 'manual' ? 'pointer' : 'default',
+                }}
+              >
+                {RUNWAY_SOURCES[gameState.runwaySource].label}
+              </span>
+            </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
               {ilsRunways.map((rwy) => {
                 const isActive = gameState.activeRunwayIds.includes(rwy.id);
@@ -371,6 +407,8 @@ export function App() {
           </div>
         );
       })()}
+
+      {airport && <StationPanel airport={airport} weather={gameState.weather} />}
 
       {/* Range selector */}
       <div>
@@ -437,7 +475,10 @@ export function App() {
 
       {/* Commands */}
       <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1 }}>COMMANDS</div>
-      <CommandPanel selected={selected} airport={airport} onCommand={handleCommand} activeRunwayIds={gameState.activeRunwayIds} />
+      <CommandPanel
+        selected={selected} airport={airport} onCommand={handleCommand} activeRunwayIds={gameState.activeRunwayIds}
+        pendingCmdTypes={selected ? gameState.pendingCmdTypes[selected.id] : undefined}
+      />
 
       {/* Score / controls */}
       <ScorePanel

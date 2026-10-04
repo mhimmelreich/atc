@@ -1,12 +1,15 @@
 // filepath: src/game/Phraseology.ts
 // Sprechfunk zwischen Lotse und Piloten: Text fürs Funk-Log und Sprechtext für die Sprachausgabe
 import type { Aircraft, ATCCommand } from '@/types/aircraft';
-import type { Airport } from '@/types/airport';
+import type { Airport, Station } from '@/types/airport';
 import type { STAR } from '@/types/navdata';
 import type { RadioVoiceKey } from '@/types/radio';
-import { headingDiff } from '@/utils/aviation';
+import type { Weather } from '@/types/weather';
+import { headingDiff, normaliseHdg } from '@/utils/aviation';
 import { radioCallsign } from './Telephony';
-import { DIGITS, NATO, altitudePhrase, pad3, plain, spellAlnum, spellDigits, spokenFix, spokenRunway, titleCase } from './Speech';
+import {
+  DIGITS, NATO, altitudePhrase, frequencyPhrase, pad3, spellAlnum, spellDigits, spokenFix, spokenName, spokenRunway, titleCase,
+} from './Speech';
 
 export interface Phrase {
   text: string;
@@ -14,10 +17,18 @@ export interface Phrase {
 }
 
 export interface RadioContext {
+  /** Anflugkontrolle, z. B. "Frankfurt Arrival" */
   station: Phrase;
+  /** Turm, z. B. "Frankfurt Tower" */
+  tower: Phrase;
+  /** Frequenz des Turms, falls bekannt */
+  towerFreq: Phrase | null;
   /** ATIS-Kennbuchstabe */
   atis: string;
-  qnh: number;
+  /** Luftdruck für Höhen unter der Übergangshöhe: "QNH 1013" bzw. "altimeter 2992" */
+  pressure: Phrase;
+  /** Bodenwind für die Landefreigabe (nur mit Wetter) */
+  wind: Phrase | null;
   transitionAltitudeFt: number;
   stars: STAR[];
 }
@@ -35,19 +46,71 @@ function hash(s: string): number {
   return h >>> 0;
 }
 
-export function radioContext(airport: Airport, stars: STAR[], now = new Date()): RadioContext {
-  // Rufname der Anflugkontrolle aus der Stadt: "Frankfurt am Main" → "Frankfurt Approach"
+/** Ort im Rufnamen aus der Stadt: "Frankfurt am Main" → "Frankfurt" */
+function placeName(airport: Airport): string {
   const base = (airport.city || airport.name)
     .split(/\s+(?:am|an|im|de|del|la)\s+|[/,(]/i)[0]
     .replace(/\b(international|intl|airport|airfield|regional|rgnl|municipal)\b/gi, '')
     .trim();
-  const station = `${titleCase(base || airport.icao)} Approach`;
+  return titleCase(base || airport.icao);
+}
+
+export interface StationInfo {
+  name: string;
+  /** Frequenz wie gesprochen, z. B. "118.505"; null, wenn unbekannt */
+  freq: string | null;
+}
+
+/** Rufnamen und Frequenzen von Anflugkontrolle und Turm; fehlt der Name in den Daten, nach der Stadt */
+export function stations(airport: Airport): { approach: StationInfo; tower: StationInfo } {
+  const info = (s: Station | undefined, role: string): StationInfo => ({
+    name: s?.name ?? `${placeName(airport)} ${s?.role ?? role}`,
+    freq: s ? frequencyPhrase(s.mhz).text : null,
+  });
+  return { approach: info(airport.stations?.approach, 'Approach'), tower: info(airport.stations?.tower, 'Tower') };
+}
+
+// USA, Kanada und der US-Pazifik stellen den Höhenmesser in inHg ein
+const INHG_REGION = /^[KCP]/;
+const HPA_PER_INHG = 33.8639;
+
+/** "QNH 1027" bzw. "altimeter 3027"; ohne Wetter ein plausibler Wert */
+function pressurePhrase(icao: string, weather: Weather | null, fallbackQnh: number): Phrase {
+  const qnh = weather?.qnh ?? fallbackQnh;
+  const inHg = weather ? weather.altimeterInHg : INHG_REGION.test(icao) ? qnh / HPA_PER_INHG : null;
+  if (inHg !== null) {
+    const v = String(Math.round(inHg * 100));
+    return phrase(`altimeter ${v}`, `altimeter ${spellDigits(v)}`);
+  }
+  return phrase(`QNH ${qnh}`, `Q N H ${spellDigits(String(qnh))}`);
+}
+
+/** Bodenwind wie vom Turm: missweisend, auf 10° gerundet ("wind 350° 3 kt", "wind calm", "wind variable 2 kt") */
+export function windPhrase(w: Weather, magneticVariation: number): Phrase {
+  if (w.windKt < 1) return phrase('wind calm');
+  const speed = String(Math.round(w.windKt));
+  const gust = w.gustKt ? String(Math.round(w.gustKt)) : null;
+  const gustText = gust ? ` gusting ${gust} kt` : '';
+  const gustSpoken = gust ? ` gusting ${spellDigits(gust)} knots` : '';
+  if (w.windDir === null) {
+    return phrase(`wind variable ${speed} kt${gustText}`, `wind variable ${spellDigits(speed)} knots${gustSpoken}`);
+  }
+  const dir = pad3(Math.round(normaliseHdg(w.windDir - magneticVariation) / 10) * 10);
+  return phrase(`wind ${dir}° ${speed} kt${gustText}`, `wind ${spellDigits(dir)} degrees ${spellDigits(speed)} knots${gustSpoken}`);
+}
+
+export function radioContext(airport: Airport, stars: STAR[], weather: Weather | null = null, now = new Date()): RadioContext {
+  const { approach, tower } = stations(airport);
+  const towerMhz = airport.stations?.tower?.mhz;
   const day = Math.floor(now.getTime() / 86_400_000);
   return {
-    station: phrase(station, plain(station)),
-    // ATIS wechselt stündlich; QNH ohne Wetteranbindung: plausibler Wert je Platz und Tag
+    station: phrase(approach.name, spokenName(approach.name)),
+    tower: phrase(tower.name, spokenName(tower.name)),
+    towerFreq: towerMhz ? frequencyPhrase(towerMhz) : null,
+    // ATIS wechselt stündlich
     atis: String.fromCharCode(65 + ((hash(airport.icao) + now.getUTCHours()) % 26)),
-    qnh: 1003 + (hash(`${airport.icao}${day}`) % 25),
+    pressure: pressurePhrase(airport.icao, weather, 1003 + (hash(`${airport.icao}${day}`) % 25)),
+    wind: weather ? windPhrase(weather, airport.magneticVariation) : null,
     transitionAltitudeFt: airport.transitionAltitudeFt,
     stars,
   };
@@ -88,7 +151,7 @@ export function instruction(ac: Aircraft, cmd: ATCCommand, ctx: RadioContext, ru
       const verb = cmd.value > ac.altitudeFt + 50 ? 'climb' : cmd.value < ac.altitudeFt - 50 ? 'descend' : 'maintain';
       const parts = [phrase(`${verb} ${alt.text}`, `${verb} ${cmd.value > ta ? '' : 'altitude '}${alt.spoken}`)];
       // Beim Sinken unter die Übergangshöhe gehört das QNH zur Freigabe
-      if (cmd.value <= ta && ac.altitudeFt > ta) parts.push(phrase(`QNH ${ctx.qnh}`, `Q N H ${spellDigits(String(ctx.qnh))}`));
+      if (cmd.value <= ta && ac.altitudeFt > ta) parts.push(ctx.pressure);
       const p = join(parts);
       return { atc: p, readback: p };
     }
@@ -119,10 +182,18 @@ export function instruction(ac: Aircraft, cmd: ATCCommand, ctx: RadioContext, ru
       const p = phrase(`cleared ILS approach runway ${cmd.runwayId}`, `cleared I L S approach runway ${spokenRunway(cmd.runwayId)}`);
       return { atc: p, readback: p };
     }
+    case 'tower': {
+      const freq = ctx.towerFreq;
+      return {
+        atc: phrase(`contact ${ctx.tower.text}${freq ? ` ${freq.text}` : ''}`, `contact ${ctx.tower.spoken}${freq ? ` ${freq.spoken}` : ''}`),
+        readback: freq ? phrase(`tower ${freq.text}`, `tower ${freq.spoken}`) : phrase('contact tower'),
+      };
+    }
     case 'land':
       if (!runwayId) return null;
       return {
-        atc: phrase(`runway ${runwayId}, cleared to land`, `runway ${spokenRunway(runwayId)}, cleared to land`),
+        // Mit dem aktuellen Bodenwind, wie vom Turm
+        atc: join([...(ctx.wind ? [ctx.wind] : []), phrase(`runway ${runwayId}, cleared to land`, `runway ${spokenRunway(runwayId)}, cleared to land`)]),
         readback: phrase(`cleared to land runway ${runwayId}`, `cleared to land runway ${spokenRunway(runwayId)}`),
       };
   }
@@ -165,6 +236,12 @@ export const establishedCall = (ac: Aircraft, runwayId: string): Phrase =>
 export const finalCall = (ac: Aircraft, runwayId: string, miles: number): Phrase =>
   pilotReport(ac, phrase(`${miles} miles final runway ${runwayId}`, `${DIGITS[miles]} miles final runway ${spokenRunway(runwayId)}`));
 
+/** Meldung beim Turm nach der Übergabe: "Frankfurt Tower, Lufthansa 4YC, established ILS runway 07L" */
+export function towerCall(ac: Aircraft, ctx: RadioContext, runwayId: string): Phrase {
+  const est = ac.state === 'established' ? 'established ' : '';
+  return join([ctx.tower, radioCallsign(ac.callsign), phrase(`${est}ILS runway ${runwayId}`, `${est}I L S runway ${spokenRunway(runwayId)}`)]);
+}
+
 export const goAroundCall = (ac: Aircraft): Phrase => pilotReport(ac, phrase('going around'));
 
 export const endOfStarCall = (ac: Aircraft): Phrase =>
@@ -172,8 +249,19 @@ export const endOfStarCall = (ac: Aircraft): Phrase =>
 
 export const sayAgainCall = (ac: Aircraft): Phrase => pilotReport(ac, phrase('say again'));
 
-/** Feste Stimme je Rufzeichen: etwa 40 % britisch, sonst amerikanisch, Sprecher aus dem Stimmmodell */
-export function pilotVoice(callsign: string): { voice: RadioVoiceKey; speaker: number } {
+export interface Voice {
+  voice: RadioVoiceKey;
+  speaker: number;
+}
+
+/** Lotsen: Approach spricht mit der Stimme "joe", der Turm mit einer britischen Sprecherin (VCTK p250) */
+export const APPROACH_VOICE: Voice = { voice: 'atc', speaker: 0 };
+export const TOWER_VOICE: Voice = { voice: 'gb', speaker: 3 };
+
+/** Feste Stimme je Rufzeichen: etwa 40 % britisch, sonst amerikanisch, Sprecher aus dem Stimmmodell (ohne die Turmstimme) */
+export function pilotVoice(callsign: string): Voice {
   const h = hash(callsign);
-  return h % 5 < 2 ? { voice: 'gb', speaker: (h >>> 4) % 109 } : { voice: 'us', speaker: (h >>> 4) % 904 };
+  if (h % 5 >= 2) return { voice: 'us', speaker: (h >>> 4) % 904 };
+  const speaker = (h >>> 4) % 108;
+  return { voice: 'gb', speaker: speaker >= TOWER_VOICE.speaker ? speaker + 1 : speaker };
 }

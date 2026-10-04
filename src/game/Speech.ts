@@ -54,3 +54,15 @@ export function altitudePhrase(ft: number, transitionAltitudeFt: number): { text
   ].filter(Boolean).join(' ');
   return { text: `${rounded} ft`, spoken: `${words || 'zero'} feet` };
 }
+
+/** Frequenz nach ICAO: alle sechs Ziffern, nur zwei Nullen am Ende entfallen ("118.780", "118.1") */
+export function frequencyPhrase(mhz: number): { text: string; spoken: string } {
+  const full = mhz.toFixed(3);
+  const text = full.endsWith('00') ? full.slice(0, -2) : full;
+  const [whole, decimals] = text.split('.');
+  return { text, spoken: `${spellDigits(whole)} decimal ${spellDigits(decimals)}` };
+}
+
+/** Rufnamen für die englische Stimme: Kürzel wie "HCF" Buchstabe für Buchstabe */
+export const spokenName = (name: string): string =>
+  plain(name).replace(/\b[A-Z]{2,3}\b/g, (abbr) => abbr.split('').join(' '));

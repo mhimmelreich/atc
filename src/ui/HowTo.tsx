@@ -6,8 +6,11 @@ import { NATO } from '@/game/Speech';
 const FONT = '"Courier New", monospace';
 const C = {
   head: '#00ff88', text: '#b8d8c0', dim: '#5a8a68', line: '#1a4428',
-  atc: '#a8d8ff', atcTag: '#55bbff', pilot: '#b8e8c8', pilotTag: '#00cc66',
+  atc: '#a8d8ff', atcTag: '#55bbff', twr: '#f4dca0', twrTag: '#e8b84a', pilot: '#b8e8c8', pilotTag: '#00cc66',
 };
+const SENDER_COLORS = {
+  APP: [C.atcTag, C.atc], TWR: [C.twrTag, C.twr], PILOT: [C.pilotTag, C.pilot],
+} as const;
 
 const TABS = ['Überblick', 'Anflug', 'Befehle', 'Sprechfunk', 'Staffelung', 'Bedienung', 'Quellen'] as const;
 type Tab = typeof TABS[number];
@@ -18,14 +21,14 @@ const H = ({ children }: { children: ReactNode }) => (
 const P = ({ children }: { children: ReactNode }) => <p style={{ margin: '0 0 8px' }}>{children}</p>;
 const B = ({ children }: { children: ReactNode }) => <b style={{ color: C.head, fontWeight: 'normal' }}>{children}</b>;
 
-/** Funk-Beispiel wie im Funk-Log: ATC blau, Pilot grün */
-function Radio({ lines }: { lines: Array<['ATC' | 'PILOT', string]> }) {
+/** Funk-Beispiel wie im Funk-Log: Approach blau, Turm gelb, Pilot grün */
+function Radio({ lines }: { lines: Array<[keyof typeof SENDER_COLORS, string]> }) {
   return (
     <div style={{ background: '#030a05', border: `1px solid ${C.line}`, borderRadius: 3, padding: '5px 8px', margin: '6px 0 8px', fontSize: 11 }}>
       {lines.map(([who, text], i) => (
         <div key={i} style={{ display: 'flex', gap: 8 }}>
-          <span style={{ color: who === 'ATC' ? C.atcTag : C.pilotTag, width: 42, flexShrink: 0, fontWeight: 'bold' }}>{who}</span>
-          <span style={{ color: who === 'ATC' ? C.atc : C.pilot }}>{text}</span>
+          <span style={{ color: SENDER_COLORS[who][0], width: 42, flexShrink: 0, fontWeight: 'bold' }}>{who}</span>
+          <span style={{ color: SENDER_COLORS[who][1] }}>{text}</span>
         </div>
       ))}
     </div>
@@ -75,12 +78,17 @@ function Overview() {
       />
       <H>DEINE ROLLE IM SPIEL</H>
       <P>Du bist <B>Approach und Tower</B> zugleich. Die Flieger kommen auf ihrer STAR in deinen Bereich und melden sich bei dir. Deine Aufgabe: sie sicher gestaffelt hintereinander auf den Endanflug bringen, das ILS freigeben und die Landung freigeben.</P>
+      <P>Wie in echt kannst du den Flieger nach der ILS-Freigabe an den Turm übergeben (CONTACT TOWER). Er wechselt auf die Turmfrequenz und meldet sich dort; die Landefreigabe kommt dann mit der Stimme des Turms. Die Übergabe ist freiwillig und bringt keine Punkte.</P>
       <P>Gut gemacht ist es, wenn keiner durchstarten muss und sich nie zwei Flieger zu nahe kommen.</P>
       <H>ECHTER VERKEHR (LIVE)</H>
       <P>Mit <B>TRAFFIC LIVE</B> zeigt das Radar statt des erfundenen Verkehrs die echten Flieger rund um den Platz, grau und mit Spur.</P>
       <P><span style={{ color: '#78d7ff' }}>Hellblau</span> sind die echten Anflüge auf deinen Platz, mit ihrem Startplatz neben dem Rufzeichen (ohne bekannte Route steht dort ein „?“). Zwischen 40 und 15 NM vor dem Platz meldet sich der Pilot bei dir; bis du ihn übernimmst, blinkt er.</P>
       <P><B>Übernehmen:</B> Klick auf den hellblauen Flieger oder auf seinen Anruf im Funk-Log. Er wird zu deinem Flieger und hört ab jetzt auf dich: Er folgt der nächstgelegenen STAR deiner aktiven Bahn; ist er schon auf dem Endanflug, behält er seine ILS-Freigabe. Sein echtes Gegenstück verschwindet vom Radar. Hat er sich noch nicht gemeldet, ruft er gleich an.</P>
       <P>Punkte gibt es nur für Landungen übernommener Flieger. Zu den echten Fliegern hältst du denselben Abstand wie zu deinen eigenen; nach der ILS-Freigabe zählt das innerhalb von 15 NM um den Platz nicht mehr, dort ist der echte Tower zuständig. LIVE läuft in Echtzeit, ohne Zeitraffer.</P>
+      <P>Die Landerichtung folgt bei LIVE den echten Landungen: Sind in 10 Minuten mindestens zwei echte Flieger in der anderen Richtung gelandet und keiner in deiner, stellt das Spiel um.</P>
+      <H>WETTER UND LANDERICHTUNG</H>
+      <P>Das Spiel holt alle 10 Minuten das aktuelle Wetter des Platzes (METAR). Daraus kommen das QNH im Funk (in den USA „altimeter“ in inHg) und der Bodenwind in der Landefreigabe.</P>
+      <P>Gelandet wird gegen den Wind. Steht <B>ACTIVE RWY</B> auf AUTO, wählt das Spiel die Richtung mit dem meisten Gegenwind (AUTO · WIND), bei LIVE die der echten Landungen (AUTO · LIVE). Ein Wechsel steht im Funk-Log. Schaltest du von Hand um, bleibt es dabei (MANUELL), bis du auf MANUELL klickst.</P>
     </>
   );
 }
@@ -92,8 +100,8 @@ function Approach() {
       <Phase n={1} title="Erstanruf">
         <P>Der Pilot meldet sich mit Höhe, STAR und dem Buchstaben der Wetterinformation (ATIS). Mit deinem ersten Befehl bestätigst du den Radarkontakt; das sagt das Spiel automatisch dazu.</P>
         <Radio lines={[
-          ['PILOT', 'Frankfurt Approach, Lufthansa 427, FL120 descending FL100, KERAX 6A arrival, information Delta'],
-          ['ATC', 'Lufthansa 427, radar contact, descend FL080'],
+          ['PILOT', 'Frankfurt Arrival, Lufthansa 427, FL120 descending FL100, KERAX 6A arrival, information Delta'],
+          ['APP', 'Lufthansa 427, radar contact, descend FL080'],
           ['PILOT', 'Descend FL080, Lufthansa 427'],
         ]} />
       </Phase>
@@ -101,37 +109,43 @@ function Approach() {
         <P>Der Flieger folgt der STAR mit ihren Höhen- und Geschwindigkeitsvorgaben. Du gibst den Sinkflug frei, kürzt per Direct-to ab oder weist eine andere STAR zu. Unter FL100 sind höchstens 250 kt üblich.</P>
         <P>Unterhalb der <B>Übergangshöhe</B> (in Deutschland meist 5000 ft) gibt es keine Flugflächen mehr, sondern Höhen über dem Meer. Mit der ersten Höhe darunter nennst du das QNH (Luftdruck).</P>
         <Radio lines={[
-          ['ATC', 'Lufthansa 427, proceed direct KERAX, then KERAX 6A arrival, expect runway 25R'],
-          ['ATC', 'Lufthansa 427, descend 5000 ft, QNH 1014'],
+          ['APP', 'Lufthansa 427, proceed direct KERAX, then KERAX 6A arrival, expect runway 25R'],
+          ['APP', 'Lufthansa 427, descend 5000 ft, QNH 1014'],
         ]} />
       </Phase>
       <Phase n={3} title="Radarführung (Vektoren)">
         <P>Für die Reihenfolge auf dem Endanflug führst du die Flieger mit Kursen: Gegenanflug parallel zur Bahn, dann Queranflug, dann Eindrehen. Ziel ist ein Abfangkurs von höchstens 30° zum Endanflug, etwa 10 bis 15 NM vor der Schwelle, auf 3000 bis 4000 ft.</P>
         <P>Mit der Geschwindigkeit regelst du die Abstände: Gegenanflug etwa 220 kt, Queranflug 180 kt, Endanflug 160 kt.</P>
         <Radio lines={[
-          ['ATC', 'Lufthansa 427, turn left heading 160'],
-          ['ATC', 'Lufthansa 427, reduce speed 180 kt'],
+          ['APP', 'Lufthansa 427, turn left heading 160'],
+          ['APP', 'Lufthansa 427, reduce speed 180 kt'],
         ]} />
       </Phase>
       <Phase n={4} title="ILS-Freigabe">
         <P>Liegt der Flieger auf dem Abfangkurs, gibst du das ILS frei. Er fängt den Localizer (Streifen <B>INT</B>), dann den Gleitpfad (<B>EST</B>) und sinkt selbstständig.</P>
         <Radio lines={[
-          ['ATC', 'Lufthansa 427, cleared ILS approach runway 25R'],
+          ['APP', 'Lufthansa 427, cleared ILS approach runway 25R'],
           ['PILOT', 'Cleared ILS approach runway 25R, Lufthansa 427'],
           ['PILOT', 'Lufthansa 427, established ILS runway 25R'],
         ]} />
+        <P>Danach übergibst du ihn an den Turm. Der Pilot liest die Frequenz zurück, wechselt und meldet sich dort.</P>
+        <Radio lines={[
+          ['APP', 'Lufthansa 427, contact Frankfurt Tower 118.780'],
+          ['PILOT', 'Tower 118.780, Lufthansa 427'],
+          ['PILOT', 'Frankfurt Tower, Lufthansa 427, established ILS runway 25R'],
+        ]} />
       </Phase>
       <Phase n={5} title="Endanflug und Landefreigabe">
-        <P>Auf dem Endanflug hältst du mindestens 3 NM Abstand zum Vordermann. Die Landefreigabe gibst du, sobald die Bahn frei ist. Fehlt sie, erinnert der Pilot 4 NM vor der Schwelle daran; bei 1 NM startet er durch.</P>
+        <P>Auf dem Endanflug hältst du mindestens 3 NM Abstand zum Vordermann. Die Landefreigabe gibst du, sobald die Bahn frei ist, mit dem aktuellen Bodenwind. Fehlt sie, erinnert der Pilot 4 NM vor der Schwelle daran; bei 1 NM startet er durch.</P>
         <Radio lines={[
           ['PILOT', 'Lufthansa 427, 4 miles final runway 25R'],
-          ['ATC', 'Lufthansa 427, runway 25R, cleared to land'],
+          ['TWR', 'Lufthansa 427, wind 250° 8 kt, runway 25R, cleared to land'],
           ['PILOT', 'Cleared to land runway 25R, Lufthansa 427'],
         ]} />
       </Phase>
       <Phase n={6} title="Durchstarten">
-        <P>Der Flieger fliegt geradeaus weiter und steigt auf 4000 ft. Seine Freigaben sind weg: du reihst ihn mit Kursen neu ein und gibst das ILS noch einmal frei.</P>
-        <Radio lines={[['PILOT', 'Lufthansa 427, going around'], ['ATC', 'Lufthansa 427, turn right heading 340, climb 4000 ft']]} />
+        <P>Der Flieger fliegt geradeaus weiter und steigt auf 4000 ft. Seine Freigaben sind weg, und er ist wieder bei Approach: du reihst ihn mit Kursen neu ein und gibst das ILS noch einmal frei.</P>
+        <Radio lines={[['PILOT', 'Lufthansa 427, going around'], ['APP', 'Lufthansa 427, turn right heading 340, climb 4000 ft']]} />
       </Phase>
       <P>In echt übergibt der Tower nach der Landung an Ground. Im Spiel endet der Flug mit dem Aufsetzen.</P>
     </>
@@ -151,7 +165,8 @@ function Commands() {
           ['Direct-to', 'Menü DIRECT TO, Wegpunkt antippen oder eintippen', 'proceed direct KERAX'],
           ['Anflugpunkt und STAR', 'Menü ENTRY → STAR: Punkt wählen, dann STAR und Bahn', 'proceed direct KERAX, then KERAX 6A arrival, expect runway 25R'],
           ['ILS', 'Knopf ILS RWY oder Menü RUNWAY / ILS', 'cleared ILS approach runway 25R'],
-          ['Landefreigabe', 'Knopf CLEARED TO LAND, erscheint nach der ILS-Freigabe', 'runway 25R, cleared to land'],
+          ['Übergabe an den Turm', 'Knopf CONTACT TOWER oder Menü, erscheint nach der ILS-Freigabe', 'contact Frankfurt Tower 118.780'],
+          ['Landefreigabe', 'Knopf CLEARED TO LAND, erscheint nach der ILS-Freigabe', 'wind 250° 8 kt, runway 25R, cleared to land'],
         ]}
       />
       <H>STATUS AUF DEM STREIFEN</H>
@@ -163,6 +178,7 @@ function Commands() {
           ['INT', 'fängt den Localizer'],
           ['EST', 'auf dem ILS, sinkt auf dem Gleitpfad'],
           ['G/A', 'startet durch'],
+          ['TWR', 'an den Turm übergeben'],
         ]}
       />
     </>
@@ -179,6 +195,9 @@ function Phraseology() {
       <P><B>Zahlen:</B> Ziffern einzeln, mit den Funk-Aussprachen tree (3), fife (5) und niner (9). Kurs 090 ist „heading zero niner zero“.</P>
       <P><B>Höhen:</B> Über der Übergangshöhe Flugflächen („flight level eight zero“, volle Hunderter als „flight level one hundred“), darunter Fuß mit QNH („altitude four thousand feet“).</P>
       <P><B>ATIS:</B> Die Wetter- und Platzinformation trägt einen Buchstaben. Der Pilot nennt ihn beim Erstanruf, damit klar ist, dass er das aktuelle Wetter kennt.</P>
+      <P><B>Rufnamen und Frequenzen:</B> Jede Stelle hat ihren eigenen Rufnamen, oft nicht nach der Stadt: in Frankfurt etwa „Frankfurt Arrival“ für den Anflug, in London „Heathrow Director“. Das Spiel nimmt sie mit den Frequenzen aus den Platzdaten (rechts unter FREQ / WX).</P>
+      <P><B>Frequenzen:</B> Gesprochen mit „decimal“ und allen sechs Ziffern, nur zwei Nullen am Ende entfallen: 118.780 ist „one one eight decimal seven eight zero“, 118.100 ist „one one eight decimal one“.</P>
+      <P><B>Wind:</B> Der Turm nennt ihn mit der Landefreigabe, missweisend und auf 10° gerundet: „wind two five zero degrees eight knots“.</P>
       <H>BUCHSTABIERALPHABET</H>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '2px 10px', fontSize: 11 }}>
         {Object.entries(NATO).map(([letter, word]) => (
@@ -231,7 +250,8 @@ function Controls() {
         ['Zoomen', 'Mausrad oder RANGE'],
         ['Verkehr', 'TRAFFIC: SIM ist erfundener Verkehr zum Lotsen, LIVE zeigt die echten Flieger (Beschriftung unter FL200, Anflüge hellblau). Die Anzeige nennt alle Flieger (AC) und die Anflüge (IN).'],
         ['Echten Anflug übernehmen', 'LIVE: Klick oder Rechtsklick auf einen hellblauen Flieger, oder Klick auf seinen Anruf im Funk-Log'],
-        ['Landerichtung', 'ACTIVE RWY: Bahnen der Gegenrichtung schalten die Betriebsrichtung um'],
+        ['Landerichtung', 'ACTIVE RWY: AUTO wählt nach dem Wind oder bei LIVE nach den echten Landungen. Bahnen der Gegenrichtung schalten von Hand um (MANUELL), ein Klick auf MANUELL wieder auf AUTO.'],
+        ['Funkstellen und Wetter', 'FREQ / WX: Approach und Turm mit Frequenz, Wind und QNH. Die Maus über WX zeigt das METAR.'],
         ['Zeitraffer', 'SESSION 1x bis 8x (bei LIVE nur 1x), Pause mit ⏸'],
         ['Anzeige', 'Unten LABELS, ILS, NAVAID, STARs'],
         ['Funk', 'RADIO zeigt das Funk-Log, VOICE schaltet die Stimmen. Ton gibt es erst nach dem ersten Klick ins Spiel.'],
@@ -246,13 +266,14 @@ function Credits() {
     <>
       <H>DATEN</H>
       <P>Flughäfen, Bahnen und Funkfeuer: {link('https://ourairports.com/data/', 'OurAirports')} (gemeinfrei).</P>
-      <P>Anflugverfahren (STARs) und ILS: Navigraph AIRAC, nur zur privaten Nutzung freigeschaltet.</P>
+      <P>Anflugverfahren (STARs), ILS und Funkfrequenzen: Navigraph AIRAC, nur zur privaten Nutzung freigeschaltet. Sonst Funkfrequenzen von {link('https://ourairports.com/data/', 'OurAirports')} (gemeinfrei).</P>
+      <P>Wetter (METAR): {link('https://aviationweather.gov/data/api/', 'aviationweather.gov')} (NOAA/NWS, gemeinfrei).</P>
       <P>Funknamen der Airlines: {link('https://openflights.org/data.php', 'OpenFlights')}, Open Database License (ODbL).</P>
       <P>Echter Verkehr (LIVE): {link('https://adsb.lol', 'adsb.lol')}, Open Database License (ODbL).</P>
       <P>Start und Ziel der echten Flüge: Routen-Abfrage von adsb.lol (adsb.im), Routendaten aus {link('https://github.com/vradarserver/standing-data', 'VRS standing-data')} (CC0).</P>
       <H>STIMMEN</H>
       <P>Sprachausgabe mit {link('https://github.com/OHF-Voice/piper1-gpl', 'Piper')} (GPL-3.0), als eigener Dienst auf dem Server.</P>
-      <P>Lotse: Stimme „joe“ (CC0). Piloten: Stimmen aus {link('https://www.openslr.org/141/', 'LibriTTS-R')} (Koizumi et al., CC BY 4.0) und dem {link('https://datashare.ed.ac.uk/handle/10283/3443', 'CSTR VCTK Corpus')} (University of Edinburgh, CC BY 4.0).</P>
+      <P>Approach: Stimme „joe“ (CC0). Turm und Piloten: Stimmen aus {link('https://www.openslr.org/141/', 'LibriTTS-R')} (Koizumi et al., CC BY 4.0) und dem {link('https://datashare.ed.ac.uk/handle/10283/3443', 'CSTR VCTK Corpus')} (University of Edinburgh, CC BY 4.0).</P>
     </>
   );
 }

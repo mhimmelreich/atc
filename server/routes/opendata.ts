@@ -1,4 +1,4 @@
-// Freie Datenbasis aus OurAirports (gemeinfrei): Flughäfen, Bahnen, VOR/NDB weltweit.
+// Freie Datenbasis aus OurAirports (gemeinfrei): Flughäfen, Bahnen, VOR/NDB und Funkfrequenzen weltweit.
 // Die CSVs werden beim ersten Bedarf nach data/opendata/ geladen und alle 30 Tage erneuert.
 // ILS gibt es dort nicht: für längere Hartbelagbahnen wird ein Standard-ILS (3°) angenommen.
 import { Router } from 'express';
@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import NodeCache from 'node-cache';
 import type { Airport, Runway } from '../../src/types/airport';
 import type { Waypoint } from '../../src/types/navdata';
+import { pickStations, type FrequencyEntry } from '../stations.js';
 
 const router = Router();
 const cache = new NodeCache({ stdTTL: 86400 });
@@ -14,6 +15,8 @@ const cache = new NodeCache({ stdTTL: 86400 });
 const DATA_DIR = process.env.OPENDATA_DIR ?? 'data/opendata';
 const BASE_URL = 'https://davidmegginson.github.io/ourairports-data';
 const FILES = ['airports', 'runways', 'navaids'] as const;
+// Frequenzen sind Zugabe: fehlen sie, gibt es trotzdem Flughäfen
+const FREQUENCY_FILE = 'airport-frequencies.csv';
 const MAX_AGE_MS = 30 * 86400_000;
 const FT_TO_M = 0.3048;
 const NAVAID_RADIUS_NM = 50;
@@ -26,6 +29,7 @@ interface OpenData {
   airports: Map<string, Row>;
   runways: Map<string, Row[]>;
   navaids: Row[];
+  frequencies: Map<string, Row[]>;
 }
 
 let data: OpenData | null = null;
@@ -76,7 +80,13 @@ function parseCsv(text: string): Row[] {
 async function loadData(): Promise<OpenData> {
   if (data) return data;
   loading ??= (async () => {
-    const [airports, runways, navaids] = await Promise.all(FILES.map(async (f) => parseCsv(await ensureFile(`${f}.csv`, `${BASE_URL}/${f}.csv`))));
+    const [[airports, runways, navaids], frequencyRows] = await Promise.all([
+      Promise.all(FILES.map(async (f) => parseCsv(await ensureFile(`${f}.csv`, `${BASE_URL}/${f}.csv`)))),
+      ensureFile(FREQUENCY_FILE, `${BASE_URL}/${FREQUENCY_FILE}`).then(parseCsv).catch((err: Error) => {
+        console.warn('opendata: Frequenzen nicht verfügbar:', err.message);
+        return [] as Row[];
+      }),
+    ]);
     const byIdent = new Map<string, Row>();
     for (const a of airports) {
       if (a.type === 'closed') continue;
@@ -91,8 +101,14 @@ async function loadData(): Promise<OpenData> {
       list.push(r);
       rwyByAirport.set(r.airport_ident, list);
     }
-    data = { airports: byIdent, runways: rwyByAirport, navaids };
-    console.log(`opendata: ${byIdent.size} Flughäfen, ${runways.length} Bahnen, ${navaids.length} Navaids geladen`);
+    const frequencies = new Map<string, Row[]>();
+    for (const f of frequencyRows) {
+      const list = frequencies.get(f.airport_ident) ?? [];
+      list.push(f);
+      frequencies.set(f.airport_ident, list);
+    }
+    data = { airports: byIdent, runways: rwyByAirport, navaids, frequencies };
+    console.log(`opendata: ${byIdent.size} Flughäfen, ${runways.length} Bahnen, ${navaids.length} Navaids, ${frequencyRows.length} Frequenzen geladen`);
     return data;
   })();
   try {
@@ -161,6 +177,23 @@ function buildRunways(rows: Row[]): Runway[] {
     }
   }
   return out;
+}
+
+// Frequenzarten bei OurAirports (Typ teils mit Zusatz wie "APP EAST"): Arrival vor Director vor Approach
+const FREQUENCY_TYPES: Record<string, Omit<FrequencyEntry, 'label' | 'mhz'>> = {
+  ARR: { kind: 'approach', rank: 0, role: 'Arrival' },
+  DIR: { kind: 'approach', rank: 1, role: 'Director' },
+  APP: { kind: 'approach', rank: 2, role: 'Approach' },
+  'A/D': { kind: 'approach', rank: 3, role: 'Approach' },
+  RDR: { kind: 'approach', rank: 4, role: 'Approach' },
+  TWR: { kind: 'tower', rank: 0, role: 'Tower' },
+};
+
+function buildStations(rows: Row[]): Airport['stations'] {
+  return pickStations(rows.flatMap((r) => {
+    const type = FREQUENCY_TYPES[r.type.split(' ')[0].toUpperCase()];
+    return type ? [{ ...type, label: r.description, mhz: Number(r.frequency_mhz) }] : [];
+  }));
 }
 
 function navaidType(type: string): Waypoint['type'] | null {
@@ -241,10 +274,12 @@ router.get('/:icao', async (req, res) => {
     if (mv !== null && dist < magDist) { magVar = mv; magDist = dist; }
   }
 
+  const stations = buildStations(d.frequencies.get(ap.ident) ?? []);
   const airport: Airport = {
     icao,
     name: ap.name,
     ...(ap.municipality ? { city: ap.municipality } : {}),
+    ...(stations ? { stations } : {}),
     lat,
     lng,
     elevationFt: num(ap.elevation_ft) ?? 0,

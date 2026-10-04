@@ -19,6 +19,11 @@ const STAR_SEARCH_NM = 80;
 // Endanflug erkannt: höchstens so weit von der Schwelle und so weit neben der Anfluggrundlinie
 const FINAL_MAX_NM = 20;
 const FINAL_MAX_DEV_DEG = 3;
+// Landende echte Flieger zeigen die Betriebsrichtung: auf der Anfluggrundlinie, tief und nicht steigend
+const LANDING_MAX_NM = 15;
+const LANDING_MAX_DEV_DEG = 4;
+const LANDING_MAX_FT_PER_NM = 450; // deutlich steiler als der Gleitpfad (3° ≈ 320 ft je NM)
+const LANDING_MAX_EXTRA_FT = 1500;
 
 export const liveId = (hex: string): string => `live-${hex}`;
 export const hexOf = (id: string): string | null => (id.startsWith('live-') ? id.slice(5) : null);
@@ -83,20 +88,36 @@ function starEntry(lat: number, lng: number, track: number, stars: STAR[], prefe
   return hit && { starId: hit.starId, index: hit.index };
 }
 
-/** Fliegt er schon auf dem Localizer einer aktiven Bahn? Dann hat er die ILS-Freigabe längst */
-function finalRunway(ac: LiveAircraft, airport: Airport, activeRunwayIds: string[]): Runway | undefined {
+/** Bahn, auf deren Anfluggrundlinie der Flieger mit passendem Kurs auf die Schwelle zufliegt */
+function alignedRunway(ac: LiveAircraft, runways: Runway[], maxNm: number, maxDevDeg: number): Runway | undefined {
   const track = ac.track;
   if (track === null) return undefined;
   let best: { rwy: Runway; dev: number } | undefined;
-  for (const rwy of airport.runways) {
-    if (!rwy.ils || (activeRunwayIds.length > 0 && !activeRunwayIds.includes(rwy.id))) continue;
+  for (const rwy of runways) {
     const dist = distanceNM(ac.lat, ac.lng, rwy.thresholdLat, rwy.thresholdLng);
     const dev = Math.abs(headingDiff(rwy.heading, bearingBetween(ac.lat, ac.lng, rwy.thresholdLat, rwy.thresholdLng)));
-    if (dist < FINAL_MAX_NM && dev < FINAL_MAX_DEV_DEG && Math.abs(headingDiff(track, rwy.heading)) < 20 && (!best || dev < best.dev)) {
+    if (dist < maxNm && dev < maxDevDeg && Math.abs(headingDiff(track, rwy.heading)) < 20 && (!best || dev < best.dev)) {
       best = { rwy, dev };
     }
   }
   return best?.rwy;
+}
+
+/** Fliegt er schon auf dem Localizer einer aktiven Bahn? Dann hat er die ILS-Freigabe längst */
+function finalRunway(ac: LiveAircraft, airport: Airport, activeRunwayIds: string[]): Runway | undefined {
+  const runways = airport.runways.filter((r) => r.ils && (activeRunwayIds.length === 0 || activeRunwayIds.includes(r.id)));
+  return alignedRunway(ac, runways, FINAL_MAX_NM, FINAL_MAX_DEV_DEG);
+}
+
+/** Landebahn eines echten Fliegers im Endanflug (für die Betriebsrichtung); steigende und hohe zählen nicht */
+export function landingRunway(ac: LiveAircraft, airport: Airport): Runway | undefined {
+  if (ac.ground || ac.altFt === null || (ac.vs ?? 0) > 300) return undefined;
+  const runways = airport.runways.filter((r) => r.ils && r.role !== 'departure');
+  const rwy = alignedRunway(ac, runways, LANDING_MAX_NM, LANDING_MAX_DEV_DEG);
+  if (!rwy) return undefined;
+  const dist = distanceNM(ac.lat, ac.lng, rwy.thresholdLat, rwy.thresholdLng);
+  const height = ac.altFt - (rwy.elevationFt || airport.elevationFt);
+  return height < dist * LANDING_MAX_FT_PER_NM + LANDING_MAX_EXTRA_FT ? rwy : undefined;
 }
 
 export interface TakeoverContext {

@@ -3,10 +3,11 @@ import type { Aircraft, ATCCommand, ConflictPair } from '@/types/aircraft';
 import type { Airport, Runway } from '@/types/airport';
 import type { STAR } from '@/types/navdata';
 import type { RadioMessage } from '@/types/radio';
+import type { Weather } from '@/types/weather';
 import { createAircraft, updateAircraft } from './Aircraft';
 import {
-  radioContext, instruction, atcCall, readbackCall, initialCall, establishedCall, finalCall,
-  goAroundCall, endOfStarCall, sayAgainCall, pilotVoice, type Phrase, type RadioContext,
+  radioContext, instruction, atcCall, readbackCall, initialCall, establishedCall, finalCall, towerCall,
+  goAroundCall, endOfStarCall, sayAgainCall, pilotVoice, APPROACH_VOICE, TOWER_VOICE, type Phrase, type RadioContext,
 } from './Phraseology';
 import { distanceNM, destinationPoint, bearingBetween } from '@/utils/geo';
 import { normaliseHdg } from '@/utils/aviation';
@@ -43,6 +44,9 @@ const ADOPT_CALL_MIN_S = 1;
 const ADOPT_CALL_MAX_S = 3;
 // Endanflug um den Platz: Abstand zu echtem Verkehr zählt dort nicht (Parallelbahnen, echter Tower)
 const FINAL_ZONE_NM = 15;
+// Nach der Übergabe meldet sich der Pilot nach dem Frequenzwechsel beim Turm
+const TOWER_CALL_MIN_S = 3;
+const TOWER_CALL_MAX_S = 6;
 
 interface SpawnCandidate {
   lat: number;
@@ -68,6 +72,7 @@ export class AircraftManager {
   private radioSeq = 0;
   private simTime = 0;
   private callIns = new Map<string, number>(); // aircraftId → Simulationszeit des Erstanrufs
+  private towerCalls = new Map<string, number>(); // aircraftId → Simulationszeit der Meldung beim Turm
   private lastCallAt = -Infinity;
   /** Im LIVE-Betrieb entsteht kein erfundener Verkehr */
   private spawning = true;
@@ -91,9 +96,20 @@ export class AircraftManager {
     this.airport = airport;
     this.stars = stars;
     this.spawnStars = stars;
+    // Wetter des neuen Platzes kommt nach (setWeather)
     this.radio = radioContext(airport, stars);
     // Neuer Platz, neuer Verkehr: Flieger des alten Platzes nicht weiterfliegen lassen
     this.clearTraffic();
+  }
+
+  /** Wetter vom Platz (METAR): echtes QNH und Bodenwind im Funk */
+  setWeather(weather: Weather | null): void {
+    if (this.airport) this.radio = radioContext(this.airport, this.stars, weather);
+  }
+
+  /** Hinweis des Spiels im Funk-Log, z. B. ein Wechsel der Landerichtung */
+  info(text: string): void {
+    this.emit({ type: 'radio', message: { id: ++this.radioSeq, ts: Date.now(), from: 'info', callsign: '', text, spoken: '', ...APPROACH_VOICE } });
   }
 
   setSpawnStars(stars: STAR[]): void {
@@ -109,6 +125,7 @@ export class AircraftManager {
     this.pendingCommands = [];
     this.activePairs.clear();
     this.callIns.clear();
+    this.towerCalls.clear();
     this.announcements.clear();
     this.announced.clear();
     this.obstacles = [];
@@ -178,11 +195,15 @@ export class AircraftManager {
     this.pendingCommands.push({ id, cmd, executeAt, readback });
   }
 
-  private say(from: RadioMessage['from'], ac: Aircraft, phrase: Phrase): void {
-    const voice = from === 'atc' ? { voice: 'atc' as const, speaker: 0 } : pilotVoice(ac.callsign);
+  /** Funkspruch auf der Frequenz, auf der der Flieger gerade ist (Approach oder Turm) */
+  private say(from: 'atc' | 'pilot', ac: Aircraft, phrase: Phrase): void {
+    const voice = from === 'pilot' ? pilotVoice(ac.callsign) : ac.tower ? TOWER_VOICE : APPROACH_VOICE;
     this.emit({
       type: 'radio',
-      message: { id: ++this.radioSeq, ts: Date.now(), from, aircraftId: ac.id, callsign: ac.callsign, text: phrase.text, spoken: phrase.spoken, ...voice },
+      message: {
+        id: ++this.radioSeq, ts: Date.now(), from, station: ac.tower ? 'twr' : 'app',
+        aircraftId: ac.id, callsign: ac.callsign, text: phrase.text, spoken: phrase.spoken, ...voice,
+      },
     });
   }
 
@@ -218,8 +239,8 @@ export class AircraftManager {
         break;
       }
       case 'direct': {
-        // Direct-to hebt eine Anflugfreigabe auf; der Flieger fliegt den Punkt direkt an
-        const cleared = { ...updated, clearedILS: false, clearedToLand: false, assignedRunway: undefined, turnDirection: undefined };
+        // Direct-to hebt eine Anflugfreigabe auf; der Flieger fliegt den Punkt direkt an (wieder bei Approach)
+        const cleared = { ...updated, clearedILS: false, clearedToLand: false, assignedRunway: undefined, turnDirection: undefined, tower: false };
         const star = ac.starId ? this.stars.find((s) => s.id === ac.starId) : undefined;
         const starIdx = star ? star.waypoints.findIndex((w) => w.id === cmd.waypointId) : -1;
         if (starIdx >= 0) {
@@ -239,7 +260,7 @@ export class AircraftManager {
           updated = {
             ...updated,
             clearedILS: false, clearedToLand: false, assignedRunway: undefined, turnDirection: undefined,
-            directTo: undefined, starId: star.id, starLegIndex: idx, state: 'enroute',
+            directTo: undefined, starId: star.id, starLegIndex: idx, state: 'enroute', tower: false,
           };
         }
         break;
@@ -248,6 +269,14 @@ export class AircraftManager {
         // Landefreigabe nur für einen Flieger mit zugewiesenem ILS
         applied = ac.clearedILS && !!ac.assignedRunway;
         if (applied) updated = { ...updated, clearedToLand: true };
+        break;
+      case 'tower':
+        // Übergabe an den Turm erst mit ILS-Freigabe; nach dem Rücklesen wechselt der Pilot die Frequenz
+        applied = ac.clearedILS && !!ac.assignedRunway && !ac.tower;
+        if (applied) {
+          updated = { ...updated, tower: true };
+          this.towerCalls.set(id, this.simTime + TOWER_CALL_MIN_S + Math.random() * (TOWER_CALL_MAX_S - TOWER_CALL_MIN_S));
+        }
         break;
     }
     this.aircraft.set(id, updated);
@@ -284,6 +313,7 @@ export class AircraftManager {
       const { updated, remove } = updateAircraft(ac, dt, now, runway, star);
       if (remove) {
         this.aircraft.delete(id);
+        this.towerCalls.delete(id);
         // Clean up activePairs for removed aircraft
         for (const key of this.activePairs.keys()) {
           if (key.includes(id)) this.activePairs.delete(key);
@@ -294,13 +324,16 @@ export class AircraftManager {
           this.emit({ type: 'goaround', callsign: updated.callsign });
         }
       } else if (updated.state === 'goaround' && ac.state !== 'goaround') {
-        // Durchstarten: Freigaben weg, Bahnkurs halten, auf 4000 ft steigen – der Lotse muss neu führen
+        // Durchstarten: Freigaben weg, Bahnkurs halten, auf 4000 ft steigen – der Lotse muss neu führen.
+        // Der Turm gibt den Flieger gleich an Approach zurück
         this.emit({ type: 'goaround', callsign: updated.callsign });
         this.say('pilot', updated, goAroundCall(updated));
+        this.towerCalls.delete(id);
         this.aircraft.set(id, {
           ...updated,
           clearedILS: false,
           clearedToLand: false,
+          tower: false,
           assignedRunway: undefined,
           targetHeading: runway ? Math.round(runway.heading) : updated.headingDeg,
           targetAltitude: Math.max(4000, Math.round(updated.altitudeFt / 1000) * 1000),
@@ -318,7 +351,16 @@ export class AircraftManager {
 
   /** Erstanrufe neuer Flieger, höchstens einer je Frame und mit Abstand zum letzten */
   private radioCallIns(): void {
-    if (!this.radio || this.simTime - this.lastCallAt < CALL_SPACING_S) return;
+    if (!this.radio) return;
+    // Meldungen beim Turm nach der Übergabe kommen gleich, sie laufen auf einer anderen Frequenz
+    for (const [id, at] of this.towerCalls) {
+      if (this.simTime < at) continue;
+      this.towerCalls.delete(id);
+      const ac = this.aircraft.get(id);
+      if (ac?.tower && ac.assignedRunway) this.say('pilot', ac, towerCall(ac, this.radio, ac.assignedRunway));
+      break;
+    }
+    if (this.simTime - this.lastCallAt < CALL_SPACING_S) return;
     for (const [id, at] of this.callIns) {
       if (this.simTime < at) continue;
       this.callIns.delete(id);
@@ -343,7 +385,8 @@ export class AircraftManager {
   private pilotReports(prev: Aircraft, next: Aircraft, runway?: Runway, star?: STAR): void {
     if (!next.contacted) return;
     if (runway && next.state === 'established') {
-      if (prev.state !== 'established') this.say('pilot', next, establishedCall(next, runway.id));
+      // Beim Turm meldet sich der Pilot mit dem Anflug, nicht noch einmal "established"
+      if (prev.state !== 'established' && !next.tower) this.say('pilot', next, establishedCall(next, runway.id));
       const before = distanceNM(prev.lat, prev.lng, runway.thresholdLat, runway.thresholdLng);
       const after = distanceNM(next.lat, next.lng, runway.thresholdLat, runway.thresholdLng);
       if (!next.clearedToLand && before >= FINAL_CALL_NM && after < FINAL_CALL_NM) {

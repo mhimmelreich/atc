@@ -30,7 +30,8 @@ export function AircraftStrip({ aircraft, selectedId, onSelect }: Props) {
   const active = aircraft.filter((a) => a.state !== 'landed');
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto', flex: 1 }}>
+    // Mindesthöhe: bei wenig Platz scrollt die Seitenleiste, statt die Streifen zusammenzudrücken
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto', flex: 1, minHeight: 110 }}>
       {active.length === 0 && (
         <div style={{ color: '#446644', fontSize: 11, textAlign: 'center', paddingTop: 16 }}>
           NO TRAFFIC
@@ -87,6 +88,7 @@ export function AircraftStrip({ aircraft, selectedId, onSelect }: Props) {
                   {ac.clearedToLand ? 'LND' : 'ILS'} {ac.assignedRunway}
                 </span>
               )}
+              {ac.tower && <span style={{ color: '#e8b84a' }} title="Beim Turm">TWR</span>}
             </div>
           </div>
         );

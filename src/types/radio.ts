@@ -1,12 +1,15 @@
 // filepath: src/types/radio.ts
-/** Stimmen des Sprachdienstes: Lotse (atc) und Piloten (us/gb, viele Sprecher) */
+/** Stimmen des Sprachdienstes: Approach (atc), Turm und Piloten (us/gb, viele Sprecher) */
 export type RadioVoiceKey = 'atc' | 'us' | 'gb';
 
 export interface RadioMessage {
   id: number;
   /** Zeitpunkt der Meldung (Date.now()) */
   ts: number;
-  from: 'atc' | 'pilot';
+  /** info: Hinweis des Spiels im Funk-Log (nicht gesprochen) */
+  from: 'atc' | 'pilot' | 'info';
+  /** Frequenz: Anflugkontrolle oder Turm */
+  station?: 'app' | 'twr';
   aircraftId?: string;
   /** ICAO-Rufzeichen wie auf dem Streifen, z. B. DLH427 */
   callsign: string;

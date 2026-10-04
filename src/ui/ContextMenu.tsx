@@ -7,6 +7,7 @@ import { distanceNM } from '@/utils/geo';
 import { getILSStatusForRunway } from '@/game/ILS';
 import { normaliseHdg, headingDiff } from '@/utils/aviation';
 import { typeData } from '@/game/constants';
+import { stations } from '@/game/Phraseology';
 
 export interface ContextMenuState {
   x: number;
@@ -109,6 +110,8 @@ export function ContextMenu({ menu, airport, onCommand, onClose, onHeadingPrevie
     rwy.ils && (activeRunwayIds.length === 0 || activeRunwayIds.includes(rwy.id)),
   ) ?? [];
   const landPending = pendingCmdTypes.includes('land');
+  const towerPending = pendingCmdTypes.includes('tower');
+  const tower = airport ? stations(airport).tower : null;
 
   // Direct-to: restliche Punkte der eigenen STAR, dann die nächstgelegenen übrigen Wegpunkte
   const star = ac.starId ? stars.find((st) => st.id === ac.starId) : undefined;
@@ -369,6 +372,21 @@ export function ContextMenu({ menu, airport, onCommand, onClose, onHeadingPrevie
               </HoverItem>
             );
           })}
+          {/* Übergabe an den Turm, danach kommt die Landefreigabe vom Turm */}
+          {ac.clearedILS && ac.assignedRunway && tower && (
+            ac.tower ? (
+              <div style={{ ...ITEM_STYLE, cursor: 'default', color: '#00ff88' }} title={tower.name}>
+                <span>On Tower {tower.freq ?? ''}</span>
+                <span style={{ fontSize: 10 }}>✓</span>
+              </div>
+            ) : (
+              <HoverItem style={{ ...ITEM_STYLE, color: towerPending ? '#ffaa00' : '#e8b84a' }} hoverBg={ITEM_HOVER}
+                onClick={() => cmd({ type: 'tower' })}>
+                <span title={tower.name}>Contact Tower {tower.freq ?? ''}</span>
+                <span style={{ fontSize: 10 }}>{towerPending ? '⧖' : 'TWR'}</span>
+              </HoverItem>
+            )
+          )}
           {ac.clearedILS && ac.assignedRunway && (
             ac.clearedToLand ? (
               <div style={{ ...ITEM_STYLE, cursor: 'default', color: '#00ff88' }}>

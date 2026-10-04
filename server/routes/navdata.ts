@@ -8,6 +8,7 @@ import NodeCache from 'node-cache';
 import type { Airport, ILSData, Runway } from '../../src/types/airport';
 import type { STAR, STARLeg, Waypoint } from '../../src/types/navdata';
 import { cityOf } from './opendata.js';
+import { pickStations, type FrequencyEntry } from '../stations.js';
 
 const router = Router();
 const cache = new NodeCache({ stdTTL: 86400 });
@@ -102,9 +103,11 @@ function loadAirport(d: DatabaseSync, icao: string): Airport | null {
     }
   }
 
+  const stations = loadStations(d, num(ap.airport_id));
   return {
     icao,
     name: str(ap.name),
+    ...(stations ? { stations } : {}),
     lat: num(ap.laty),
     lng: num(ap.lonx),
     elevationFt: num(ap.altitude),
@@ -112,6 +115,22 @@ function loadAirport(d: DatabaseSync, icao: string): Airport | null {
     transitionAltitudeFt: num(ap.transition_altitude) || 5000,
     runways,
   };
+}
+
+// Frequenzarten der LNM-DB: ARR Arrival, DIR Director, A Approach, RDR Radar, T Tower (Frequenz in kHz)
+const COM_TYPES: Record<string, Omit<FrequencyEntry, 'label' | 'mhz'>> = {
+  ARR: { kind: 'approach', rank: 0, role: 'Arrival' },
+  DIR: { kind: 'approach', rank: 1, role: 'Director' },
+  A: { kind: 'approach', rank: 2, role: 'Approach' },
+  RDR: { kind: 'approach', rank: 3, role: 'Approach' },
+  T: { kind: 'tower', rank: 0, role: 'Tower' },
+};
+
+function loadStations(d: DatabaseSync, airportId: number): Airport['stations'] {
+  const rows = d.prepare(
+    `SELECT type, frequency, name FROM com WHERE airport_id = ? AND type IN ('ARR', 'DIR', 'A', 'RDR', 'T')`,
+  ).all(airportId) as Row[];
+  return pickStations(rows.map((r) => ({ ...COM_TYPES[str(r.type)], label: str(r.name), mhz: num(r.frequency) / 1000 })));
 }
 
 function ilsCategory(perf: string): ILSData['category'] {

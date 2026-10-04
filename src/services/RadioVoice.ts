@@ -61,7 +61,8 @@ export class RadioVoice {
   }
 
   enqueue(msg: RadioMessage): void {
-    if (!this.enabled) return;
+    // Hinweise des Spiels stehen nur im Log
+    if (!this.enabled || msg.from === 'info') return;
     this.queue.push(msg);
     while (this.queue.length > MAX_QUEUE) this.buffers.delete(this.queue.shift()!.id);
     this.prefetch();

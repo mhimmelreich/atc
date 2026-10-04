@@ -1,19 +1,32 @@
 // filepath: src/game/GameEngine.ts
-import type { Airport } from '@/types/airport';
+import type { Airport, Runway } from '@/types/airport';
 import type { Aircraft, ATCCommand, ConflictPair, TrailPoint } from '@/types/aircraft';
 import type { LiveAircraft, LiveInbound, LiveStatus, TrafficMode } from '@/types/live';
 import type { Waypoint, STAR } from '@/types/navdata';
 import type { RadioMessage } from '@/types/radio';
+import type { Weather } from '@/types/weather';
 import { AircraftManager } from './AircraftManager';
-import { inbound, callsIn, liveToAircraft, liveId, hexOf, type Inbound, type TakeoverContext } from './LiveTraffic';
+import { inbound, callsIn, liveToAircraft, liveId, hexOf, landingRunway, type Inbound, type TakeoverContext } from './LiveTraffic';
 import { RadarRenderer, DEFAULT_DISPLAY, type DisplayOptions } from './RadarRenderer';
 import { headingDiff } from '@/utils/aviation';
+import { pad3 } from './Speech';
 import { destinationPoint, distanceNM } from '@/utils/geo';
 import { SCORE_LANDING, SCORE_GOAROUND, SCORE_SEPARATION_VIOLATION, SCORE_COLLISION } from './constants';
 
 const RADIO_LOG_SIZE = 50;
 const LIVE_TRAIL_MAX = 20;
 const LIVE_EXTRAPOLATE_MAX_S = 30;
+// Landerichtung aus dem Wind: erst ab etwas Wind; umgestellt wird erst bei mehr als 2 kt Rückenwind (Gegenrichtung)
+const WIND_MIN_KT = 3;
+const WIND_SWITCH_KT = 4;
+// Landerichtung aus dem echten Verkehr: Landungen der letzten 10 Minuten je Richtung
+const LIVE_FINALS_MEMORY_MS = 10 * 60_000;
+const LIVE_FINALS_SWITCH = 2;
+// Bahnen gleicher Betriebsrichtung (Parallelbahnen)
+const SAME_DIRECTION_DEG = 20;
+
+/** Woher die aktiven Bahnen kommen: Standard, Wind (METAR), echte Landungen (LIVE) oder von Hand */
+export type RunwaySource = 'default' | 'wind' | 'live' | 'manual';
 
 export interface GameState {
   score: number;
@@ -38,6 +51,9 @@ export interface GameState {
   live: LiveStatus;
   /** Rufzeichen der echten Flieger (für Warnungen) */
   liveNames: Record<string, string>;
+  /** Wetter am Platz (METAR), null solange unbekannt */
+  weather: Weather | null;
+  runwaySource: RunwaySource;
 }
 
 export { type DisplayOptions };
@@ -56,6 +72,7 @@ export interface SessionData {
   timeScale: number;
   display: DisplayOptions;
   activeRunwayIds: string[];
+  runwaySource?: RunwaySource;
   trafficMode?: TrafficMode;
   /** Übernommene echte Flieger: ihr echtes Gegenstück bleibt ausgeblendet */
   liveHexes?: string[];
@@ -89,6 +106,8 @@ export class GameEngine {
     trafficMode: 'sim',
     live: { count: 0, inbound: 0, updatedAt: null, error: false },
     liveNames: {},
+    weather: null,
+    runwaySource: 'default',
   };
   get rangeNM(): number { return this.state.rangeNM; }
   private onStateChange: StateCallback;
@@ -100,6 +119,7 @@ export class GameEngine {
   private liveInbound = new Map<string, Inbound>(); // hex → Anflug zum gewählten Platz
   private takenOver = new Set<string>();             // hex der übernommenen echten Flieger
   private liveFrame: LiveAircraft[] = [];            // echte Flieger im letzten Bild (für Klicks)
+  private liveFinals = new Map<string, { heading: number; at: number }>(); // hex → Bahnkurs, zuletzt im Endanflug gesehen
 
   constructor(onStateChange: StateCallback) {
     this.onStateChange = onStateChange;
@@ -158,9 +178,10 @@ export class GameEngine {
     const activeRunwayIds = ilsRunways.length > 0
       ? this.pickPrimaryDirection(ilsRunways).map((r) => r.id)
       : [];
-    this.state = { ...this.state, activeRunwayIds, radio: [] };
+    this.state = { ...this.state, activeRunwayIds, radio: [], weather: null, runwaySource: 'default' };
     this.manager.setSpawnStars(this.activeStars());
     this.clearLive();
+    this.liveFinals.clear();
     if (this.state.trafficMode === 'sim') for (let i = 0; i < 3; i++) this.manager.forceSpawn();
   }
 
@@ -171,6 +192,7 @@ export class GameEngine {
     this.manager.setSpawning(mode === 'sim');
     this.manager.clearTraffic();
     this.clearLive();
+    this.liveFinals.clear();
     if (mode === 'sim' && this.airport) for (let i = 0; i < 3; i++) this.manager.forceSpawn();
     this.trySave();
   }
@@ -187,6 +209,7 @@ export class GameEngine {
       trails.set(ac.hex, !last || last.ts < ac.ts ? [...trail, { lat: ac.lat, lng: ac.lng, ts: ac.ts }].slice(-LIVE_TRAIL_MAX) : trail);
     }
     this.liveTrails = trails;
+    this.detectRunwayInUse(list);
 
     // Anflüge zum gewählten Platz; zwischen 40 und 15 NM melden sie sich (nächster zuerst)
     this.liveInbound.clear();
@@ -211,6 +234,14 @@ export class GameEngine {
       live: { count: trails.size, inbound: this.liveInbound.size, updatedAt: Date.now(), error: false },
       liveNames,
     };
+  }
+
+  /** Wetter vom Platz: echtes QNH und Wind im Funk, Landerichtung nach dem Wind */
+  setWeather(weather: Weather | null): void {
+    if (weather && weather.icao !== this.airport?.icao) return;
+    this.state = { ...this.state, weather };
+    this.manager.setWeather(weather);
+    this.runwayFromWind();
   }
 
   setLiveError(): void {
@@ -375,6 +406,86 @@ export class GameEngine {
     this.trySave();
   }
 
+  /** Bahnen mit ILS, auf denen gelandet werden darf */
+  private landingRunways(): Runway[] {
+    return this.airport?.runways.filter((r) => r.ils && r.role !== 'departure') ?? [];
+  }
+
+  /** Alle Landebahnen einer Betriebsrichtung aktivieren; ein Wechsel steht im Funk-Log */
+  private applyDirection(heading: number, source: RunwaySource, reason: string): void {
+    const ids = this.landingRunways().filter((r) => Math.abs(headingDiff(r.heading, heading)) < SAME_DIRECTION_DEG).map((r) => r.id);
+    if (ids.length === 0) return;
+    const current = this.state.activeRunwayIds;
+    const changed = ids.length !== current.length || ids.some((id) => !current.includes(id));
+    this.state = { ...this.state, activeRunwayIds: ids, runwaySource: source };
+    if (changed) {
+      this.manager.setSpawnStars(this.activeStars());
+      this.manager.info(`Landerichtung ${ids.join(' ')} (${reason})`);
+    }
+    this.trySave();
+  }
+
+  /** Landerichtung mit dem meisten Gegenwind, solange weder Hand noch echter Verkehr entschieden haben */
+  private runwayFromWind(): void {
+    const w = this.state.weather;
+    const source = this.state.runwaySource;
+    if (!w || w.windDir === null || w.windKt < WIND_MIN_KT || (source !== 'default' && source !== 'wind')) return;
+    const windDir = w.windDir;
+    // Wind und Bahnkurse sind rechtweisend
+    const headwind = (r: Runway) => w.windKt * Math.cos(((windDir - r.heading) * Math.PI) / 180);
+    const runways = this.landingRunways();
+    const best = runways.reduce<Runway | null>((b, r) => (!b || headwind(r) > headwind(b) ? r : b), null);
+    if (!best) return;
+    const active = runways.filter((r) => this.state.activeRunwayIds.includes(r.id));
+    const current = active.length > 0 ? Math.max(...active.map(headwind)) : -Infinity;
+    if (headwind(best) - current > WIND_SWITCH_KT) {
+      this.applyDirection(best.heading, 'wind', `Wind ${pad3(windDir)}° ${Math.round(w.windKt)} kt`);
+    } else {
+      this.state = { ...this.state, runwaySource: 'wind' };
+    }
+  }
+
+  /**
+   * LIVE: Landerichtung der echten Flieger übernehmen. Wechsel erst, wenn in 10 Minuten mindestens zwei
+   * in der anderen Richtung gelandet sind und keiner in der aktuellen.
+   */
+  private detectRunwayInUse(list: LiveAircraft[]): void {
+    const airport = this.airport;
+    if (!airport) return;
+    const now = Date.now();
+    for (const ac of list) {
+      const rwy = landingRunway(ac, airport);
+      if (rwy) this.liveFinals.set(ac.hex, { heading: rwy.heading, at: now });
+    }
+    for (const [hex, f] of this.liveFinals) if (now - f.at > LIVE_FINALS_MEMORY_MS) this.liveFinals.delete(hex);
+    if (this.state.runwaySource === 'manual') return;
+
+    const groups: Array<{ heading: number; count: number }> = [];
+    for (const f of this.liveFinals.values()) {
+      const g = groups.find((x) => Math.abs(headingDiff(x.heading, f.heading)) < SAME_DIRECTION_DEG);
+      if (g) g.count++;
+      else groups.push({ heading: f.heading, count: 1 });
+    }
+    const active = this.landingRunways().filter((r) => this.state.activeRunwayIds.includes(r.id));
+    const isActive = (heading: number) => active.some((r) => Math.abs(headingDiff(r.heading, heading)) < SAME_DIRECTION_DEG);
+    const current = groups.filter((g) => isActive(g.heading)).reduce((n, g) => n + g.count, 0);
+    const other = groups.filter((g) => !isActive(g.heading)).sort((a, b) => b.count - a.count)[0];
+    if (current === 0 && other && other.count >= LIVE_FINALS_SWITCH) {
+      this.applyDirection(other.heading, 'live', 'echter Verkehr');
+    } else if (current >= LIVE_FINALS_SWITCH && this.state.runwaySource !== 'live') {
+      this.state = { ...this.state, runwaySource: 'live' };
+      this.trySave();
+    }
+  }
+
+  /** Landerichtung wieder automatisch wählen (nach Wind und, bei LIVE, nach dem echten Verkehr) */
+  setRunwayAuto(): void {
+    this.state = { ...this.state, runwaySource: 'default' };
+    this.detectRunwayInUse([]);
+    this.runwayFromWind();
+    this.trySave();
+  }
+
   toggleActiveRunway(id: string): void {
     const ids = this.state.activeRunwayIds;
     let next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
@@ -388,7 +499,8 @@ export class GameEngine {
       const flipped = ids.map((x) => (opposite(x) ? this.airport!.runways.find((r) => r.id === x)!.recipId : x));
       next = [...new Set([...flipped, id])];
     }
-    this.state = { ...this.state, activeRunwayIds: next };
+    // Von Hand gewählt: keine automatische Umstellung mehr, bis AUTO gedrückt wird
+    this.state = { ...this.state, activeRunwayIds: next, runwaySource: 'manual' };
     this.manager.setSpawnStars(this.activeStars());
     this.trySave();
   }
@@ -442,6 +554,7 @@ export class GameEngine {
         timeScale: this.state.timeScale,
         display: this.state.display,
         activeRunwayIds: this.state.activeRunwayIds,
+        runwaySource: this.state.runwaySource,
         trafficMode: this.state.trafficMode,
         liveHexes: [...this.takenOver],
         viewLat: this.viewLat,
@@ -476,6 +589,7 @@ export class GameEngine {
       timeScale: data.trafficMode === 'live' ? 1 : data.timeScale ?? 1,
       display: data.display ?? { ...DEFAULT_DISPLAY },
       activeRunwayIds: data.activeRunwayIds ?? [],
+      runwaySource: data.runwaySource ?? 'default',
       trafficMode: data.trafficMode ?? 'sim',
     };
     this.manager.setSpawning(this.state.trafficMode === 'sim');

@@ -46,6 +46,8 @@ export interface Aircraft {
   contacted?: boolean;
   /** Lotse hat den Flieger angesprochen ("radar contact") */
   identified?: boolean;
+  /** An den Turm übergeben: Funk läuft auf der Turmfrequenz */
+  tower?: boolean;
   /** Übernommener echter Flieger (LIVE): Transponder-Adresse */
   liveHex?: string;
   /** Startplatz (echte Flieger, laut Flugroute) */
@@ -66,6 +68,8 @@ export type ATCCommand =
   | { type: 'speed'; value: number }
   | { type: 'ils'; runwayId: string }
   | { type: 'land' }
+  /** Übergabe an den Turm (nach der ILS-Freigabe) */
+  | { type: 'tower' }
   | { type: 'direct'; waypointId: string; lat: number; lng: number }
   /** Anflugpunkt direkt, danach die gewählte STAR ab diesem Punkt */
   | { type: 'star'; starId: string; waypointId: string };
