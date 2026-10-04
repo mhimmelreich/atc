@@ -58,4 +58,6 @@ export type ATCCommand =
   | { type: 'speed'; value: number }
   | { type: 'ils'; runwayId: string }
   | { type: 'land' }
-  | { type: 'direct'; waypointId: string; lat: number; lng: number };
+  | { type: 'direct'; waypointId: string; lat: number; lng: number }
+  /** Anflugpunkt direkt, danach die gewählte STAR ab diesem Punkt */
+  | { type: 'star'; starId: string; waypointId: string };

@@ -65,6 +65,10 @@ const ITEM_HOVER = '#0d2a18';
 export function ContextMenu({ menu, airport, onCommand, onClose, onHeadingPreview, onAltitudePreview, pendingCmdTypes = [], activeRunwayIds = [], waypoints = [], stars = [] }: Props) {
   const { aircraft: ac } = menu;
   const ref = useRef<HTMLDivElement>(null);
+  const [entryId, setEntryId] = useState<string | null>(null);
+  const starListRef = useRef<HTMLDivElement>(null);
+  // STAR-Auswahl nach Wahl des Anflugpunkts sichtbar machen (Menü scrollt)
+  useEffect(() => { if (entryId) starListRef.current?.scrollIntoView({ block: 'nearest' }); }, [entryId]);
 
   useEffect(() => {
     const handleDown = (e: MouseEvent) => {
@@ -116,6 +120,21 @@ export function ContextMenu({ menu, airport, onCommand, onClose, onHeadingPrevie
     .sort((a, b) => a.dist - b.dist)
     .slice(0, 6);
   const sendDirect = (w: Waypoint) => cmd({ type: 'direct', waypointId: w.id, lat: w.lat, lng: w.lng });
+
+  // Anflugpunkt → STAR: Startpunkte der STARs der aktiven Bahnen, danach die STARs über den gewählten Punkt
+  const activeStars = (() => {
+    const m = stars.filter((st) => st.runway === 'ALL' || activeRunwayIds.includes(st.runway));
+    return m.length > 0 ? m : stars;
+  })();
+  const starPoints = [...new Map(activeStars.flatMap((st) => st.waypoints).map((w) => [w.id, w])).values()];
+  const entryPoints = [...new Map(activeStars.map((st) => [st.waypoints[0].id, st.waypoints[0]])).values()]
+    .map((w) => ({ w, dist: distanceNM(ac.lat, ac.lng, w.lat, w.lng) }))
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, 9);
+  const entryGroups = [...activeStars
+    .filter((st) => entryId && st.waypoints.some((w) => w.id === entryId))
+    .reduce((m, st) => m.set(st.name ?? st.id, [...(m.get(st.name ?? st.id) ?? []), st]), new Map<string, STAR[]>())];
+  const starPending = pendingCmdTypes.includes('star');
 
   return (
     <div ref={ref} style={{ ...MENU_STYLE, left: x, top: y, maxHeight: `calc(100vh - ${y + 4}px)` }}>
@@ -265,6 +284,57 @@ export function ContextMenu({ menu, airport, onCommand, onClose, onHeadingPrevie
             ))}
           </div>
           <FixInput waypoints={waypoints} onSend={sendDirect} />
+        </>
+      )}
+
+      {/* ── ANFLUGPUNKT → STAR ── */}
+      {entryPoints.length > 0 && (
+        <>
+          <div style={SECTION_STYLE}>
+            ENTRY → STAR
+            <span style={{ float: 'right', fontSize: 10, fontWeight: 'normal', letterSpacing: 0,
+              color: starPending ? '#ffaa00' : '#b478ff' }}>
+              {starPending ? '⧖ ' : ''}
+              {star && ac.state === 'enroute' && !ac.directTo ? (star.name ?? star.id) : ''}
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+            {entryPoints.map(({ w, dist }) => (
+              <HoverItem key={`e-${w.id}`} hoverBg={ITEM_HOVER} onClick={() => setEntryId(entryId === w.id ? null : w.id)}
+                style={{ ...ITEM_STYLE, flex: '0 0 33%', justifyContent: 'center', gap: 4, fontSize: 11, padding: '5px 4px',
+                  color: '#b478ff', boxSizing: 'border-box', background: entryId === w.id ? '#24153a' : 'transparent' }}>
+                <span>{w.id}</span>
+                <span style={{ color: '#6a4a90', fontSize: 9 }}>{Math.round(dist)}</span>
+              </HoverItem>
+            ))}
+          </div>
+          <FixInput waypoints={starPoints} placeholder="Anflugpunkt eingeben + Enter" onSend={(w) => setEntryId(w.id)} />
+          {/* STARs über den gewählten Punkt; Bahnvarianten derselben STAR als Buttons */}
+          <div ref={starListRef}>
+            {entryGroups.map(([name, variants]) => {
+              const legsLeft = variants[0].waypoints.length - variants[0].waypoints.findIndex((w) => w.id === entryId);
+              return (
+                <div key={name} style={{ ...ITEM_STYLE, cursor: 'default', color: '#c89aff', gap: 6, padding: '4px 12px' }}>
+                  <span style={{ whiteSpace: 'nowrap' }}>
+                    {name} <span style={{ color: '#6a4a90', fontSize: 9 }}>{legsLeft} WPT</span>
+                  </span>
+                  <span style={{ display: 'flex', gap: 3 }}>
+                    {variants.map((st) => {
+                      const assigned = ac.starId === st.id && ac.state === 'enroute' && !ac.directTo;
+                      return (
+                        <HoverItem key={st.id} hoverBg="#24153a"
+                          onClick={() => cmd({ type: 'star', starId: st.id, waypointId: entryId! })}
+                          style={{ padding: '2px 5px', border: `1px solid ${assigned ? '#00cc66' : '#3a2a55'}`, borderRadius: 2,
+                            fontSize: 10, cursor: 'pointer', color: assigned ? '#00cc66' : '#c89aff' }}>
+                          {st.runway}
+                        </HoverItem>
+                      );
+                    })}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </>
       )}
 
@@ -480,7 +550,9 @@ function ScrollableValue({ initial, step, stepShift, min, max, wrap, format, uni
 }
 
 // Freie Eingabe eines Wegpunkts (Kennung + Enter)
-function FixInput({ waypoints, onSend }: { waypoints: Waypoint[]; onSend: (w: Waypoint) => void }) {
+function FixInput({ waypoints, onSend, placeholder = 'Fix eingeben + Enter' }: {
+  waypoints: Waypoint[]; onSend: (w: Waypoint) => void; placeholder?: string;
+}) {
   const [value, setValue] = useState('');
   const [error, setError] = useState(false);
   const submit = () => {
@@ -492,7 +564,7 @@ function FixInput({ waypoints, onSend }: { waypoints: Waypoint[]; onSend: (w: Wa
     <div style={{ padding: '2px 8px 6px' }}>
       <input
         value={value}
-        placeholder="Fix eingeben + Enter"
+        placeholder={placeholder}
         spellCheck={false}
         onChange={(e) => { setValue(e.target.value.toUpperCase()); setError(false); }}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); submit(); } }}
@@ -532,19 +604,21 @@ function HoverItem({
   onClick: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const baseBg = style.background;
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const enter = () => (el.style.background = hoverBg);
-    const leave = () => (el.style.background = 'transparent');
+    // Zurück auf den eigenen Hintergrund (z. B. markierte Auswahl), nicht pauschal transparent
+    const leave = () => (el.style.background = String(baseBg ?? 'transparent'));
     el.addEventListener('mouseenter', enter);
     el.addEventListener('mouseleave', leave);
     return () => {
       el.removeEventListener('mouseenter', enter);
       el.removeEventListener('mouseleave', leave);
     };
-  }, [hoverBg]);
+  }, [hoverBg, baseBg]);
 
   return (
     <div ref={ref} style={style} onClick={onClick}>

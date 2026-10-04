@@ -187,7 +187,11 @@ export class RadarRenderer {
     }
 
     for (const ac of opts.aircraft) this.drawTrail(ac, ll2c, opts.trailLength);
-    for (const ac of opts.aircraft) this.drawAircraft(ac, ll2c, ac.id === opts.selectedId, W, H, opts.display.labels);
+    for (const ac of opts.aircraft) {
+      const selected = ac.id === opts.selectedId;
+      const route = selected && ac.starId ? opts.stars.find((s) => s.id === ac.starId) : undefined;
+      this.drawAircraft(ac, ll2c, selected, W, H, opts.display.labels, route);
+    }
 
     // Compass border
     ctx.strokeStyle = C.COMPASS;
@@ -771,11 +775,30 @@ export class RadarRenderer {
     ll2c: (lat: number, lng: number) => { x: number; y: number },
     selected: boolean,
     W: number, H: number,
-    showLabel = true
+    showLabel = true,
+    route?: STAR,
   ): void {
     const { ctx } = this;
     const p = ll2c(ac.lat, ac.lng);
     if (p.x < -40 || p.x > W + 40 || p.y < -40 || p.y > H + 40) return;
+
+    // Restliche STAR-Route des ausgewählten Fliegers hervorheben
+    if (route && ac.state === 'enroute' && !ac.directTo && !ac.clearedILS) {
+      const rest = route.waypoints.slice(ac.starLegIndex ?? 0);
+      if (rest.length > 0) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(200,150,255,0.85)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        for (const w of rest) {
+          const q = ll2c(w.lat, w.lng);
+          ctx.lineTo(q.x, q.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
 
     // Direct-to-Linie zum Zielpunkt (nur ausgewählter Flieger)
     if (selected && ac.directTo) {

@@ -127,6 +127,19 @@ export class AircraftManager {
         }
         break;
       }
+      case 'star': {
+        // Anflugpunkt + STAR: Punkt direkt anfliegen, danach der STAR folgen (hebt Anflugfreigabe auf)
+        const star = this.stars.find((s) => s.id === cmd.starId);
+        const idx = star ? star.waypoints.findIndex((w) => w.id === cmd.waypointId) : -1;
+        if (star && idx >= 0) {
+          updated = {
+            ...updated,
+            clearedILS: false, clearedToLand: false, assignedRunway: undefined, turnDirection: undefined,
+            directTo: undefined, starId: star.id, starLegIndex: idx, state: 'enroute',
+          };
+        }
+        break;
+      }
       case 'land':
         // Landefreigabe nur für einen Flieger mit zugewiesenem ILS
         if (ac.clearedILS && ac.assignedRunway) updated = { ...updated, clearedToLand: true };
