@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import NodeCache from 'node-cache';
 import type { Airport, ILSData, Runway } from '../../src/types/airport';
 import type { STAR, STARLeg, Waypoint } from '../../src/types/navdata';
+import { cityOf } from './opendata.js';
 
 const router = Router();
 const cache = new NodeCache({ stdTTL: 86400 });
@@ -141,8 +142,10 @@ function loadStars(d: DatabaseSync, airport: Airport, waypoints: Map<string, Way
     const name = str(p.fix_ident);
     const pts: Waypoint[] = [];
     const legs: STARLeg[] = [];
+    const idents: string[] = [];
     for (const l of legStmt.all(num(p.approach_id)) as Row[]) {
       const ident = str(l.fix_ident);
+      if (ident) idents.push(ident);
       // Legs ohne Fix (Vektoren, FM/VM) und Bahnschwellen überspringen
       if (!ident || l.fix_lonx == null || l.fix_type === 'R') continue;
       if (pts.length > 0 && pts[pts.length - 1].id === ident) continue;
@@ -163,11 +166,30 @@ function loadStars(d: DatabaseSync, airport: Airport, waypoints: Map<string, Way
     }
     if (pts.length < 2) continue;
     for (const wp of pts) waypoints.set(wp.id, wp);
+    const fullName = procedureName(d, name, idents, airport);
     for (const runway of starRunways(p, airport)) {
-      stars.push({ id: `${name}/${runway}`, name, icao, runway, waypoints: pts, legs });
+      stars.push({ id: `${name}/${runway}`, name, fullName, icao, runway, waypoints: pts, legs });
     }
   }
   return stars;
+}
+
+// ARINC kürzt den Fix im Prozedurnamen auf vier Buchstaben (KERA6A = KERAX 6A): voller Fix aus den Legs,
+// bei Navaid-STARs (BIG1Z) der Name des Navaids
+function procedureName(d: DatabaseSync, name: string, idents: string[], airport: Airport): string {
+  const m = /^([A-Z]{2,5})(\d[A-Z]?)$/.exec(name);
+  if (!m) return name;
+  const [, base, code] = m;
+  let fix = idents.find((id) => id.length === 5 && id.startsWith(base)) ?? base;
+  if (base.length <= 3 && idents.includes(base)) {
+    const vor = d.prepare(
+      `SELECT name FROM vor WHERE ident = ?
+        ORDER BY (laty - ?) * (laty - ?) + (lonx - ?) * (lonx - ?) LIMIT 1`,
+    ).get(base, airport.lat, airport.lat, airport.lng, airport.lng) as Row | undefined;
+    const word = str(vor?.name).split(/\s+/)[0].toUpperCase();
+    if (/^[A-Z]{3,}$/.test(word)) fix = word;
+  }
+  return `${fix} ${code}`;
 }
 
 // Bahnen einer STAR: runway_name, sonst ARINC "RW26B" (= alle Parallelbahnen 26), sonst "ALL"
@@ -239,7 +261,7 @@ router.get('/', (_req, res) => {
   res.json({ available: d !== null, cycle });
 });
 
-router.get('/:icao', (req, res) => {
+router.get('/:icao', async (req, res) => {
   const icao = req.params.icao.toUpperCase();
   if (!/^[A-Z0-9]{3,4}$/.test(icao)) { res.status(400).json({ error: 'Ungültiger ICAO-Code' }); return; }
 
@@ -258,6 +280,12 @@ router.get('/:icao', (req, res) => {
 
   const airport = loadAirport(d, icao);
   if (!airport) { res.status(404).json({ error: `Flughafen ${icao} nicht gefunden` }); return; }
+  // Die LNM-DB kennt keine Städte: Stadt aus OurAirports, ohne die Antwort lange aufzuhalten
+  const city = await Promise.race([
+    cityOf(icao).catch(() => undefined),
+    new Promise<undefined>((resolve) => setTimeout(resolve, 3000)),
+  ]);
+  if (city) airport.city = city;
 
   const waypoints = new Map<string, Waypoint>();
   const stars = loadStars(d, airport, waypoints);

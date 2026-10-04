@@ -44,6 +44,8 @@ export interface AirportLayer {
 export interface Airport {
   icao: string;
   name: string;
+  /** Stadt (OurAirports), für den Rufnamen der Anflugkontrolle */
+  city?: string;
   lat: number;
   lng: number;
   elevationFt: number;

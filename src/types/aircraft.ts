@@ -42,6 +42,10 @@ export interface Aircraft {
   starId?: string;
   /** Index into the STAR's waypoints array — current target leg */
   starLegIndex?: number;
+  /** Pilot hat sich auf der Frequenz gemeldet (Erstanruf) */
+  contacted?: boolean;
+  /** Lotse hat den Flieger angesprochen ("radar contact") */
+  identified?: boolean;
 }
 
 export interface ConflictPair {

@@ -102,6 +102,12 @@ async function loadData(): Promise<OpenData> {
   }
 }
 
+/** Stadt eines Flughafens laut OurAirports, z. B. für den Rufnamen der Anflugkontrolle */
+export async function cityOf(icao: string): Promise<string | undefined> {
+  const d = await loadData();
+  return d.airports.get(icao)?.municipality || undefined;
+}
+
 // ── Mapping ──────────────────────────────────────────────────────────────────
 const num = (v: string | undefined): number | null => (v === undefined || v === '' ? null : Number(v));
 
@@ -238,6 +244,7 @@ router.get('/:icao', async (req, res) => {
   const airport: Airport = {
     icao,
     name: ap.name,
+    ...(ap.municipality ? { city: ap.municipality } : {}),
     lat,
     lng,
     elevationFt: num(ap.elevation_ft) ?? 0,

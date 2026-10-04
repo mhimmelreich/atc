@@ -1,8 +1,13 @@
 // filepath: src/game/AircraftManager.ts
 import type { Aircraft, ATCCommand, ConflictPair } from '@/types/aircraft';
-import type { Airport } from '@/types/airport';
+import type { Airport, Runway } from '@/types/airport';
 import type { STAR } from '@/types/navdata';
+import type { RadioMessage } from '@/types/radio';
 import { createAircraft, updateAircraft } from './Aircraft';
+import {
+  radioContext, instruction, atcCall, readbackCall, initialCall, establishedCall, finalCall,
+  goAroundCall, endOfStarCall, sayAgainCall, pilotVoice, type Phrase, type RadioContext,
+} from './Phraseology';
 import { distanceNM, destinationPoint, bearingBetween } from '@/utils/geo';
 import { normaliseHdg } from '@/utils/aviation';
 import {
@@ -13,13 +18,18 @@ import {
   SPAWN_INTERVAL_MIN_S, SPAWN_INTERVAL_MAX_S,
 } from './constants';
 
-type EventType = 'landing' | 'goaround' | 'conflict' | 'warning' | 'clear';
-type EventHandler = (event: { type: EventType; callsign?: string; pair?: ConflictPair }) => void;
+type EventType = 'landing' | 'goaround' | 'conflict' | 'warning' | 'clear' | 'radio';
+type EventHandler = (event: { type: EventType; callsign?: string; pair?: ConflictPair; message?: RadioMessage }) => void;
 
 const SPAWN_ATTEMPTS = 20;
 const SPAWN_MIN_LATERAL_NM = 8;
 const SPAWN_MIN_VERTICAL_FT = 2000;
 const SPAWN_RETRY_S = 10;
+// Funk: Erstanruf einige Sekunden nach dem Erscheinen, Anrufe mit Abstand nacheinander
+const CALL_IN_MIN_S = 3;
+const CALL_IN_MAX_S = 10;
+const CALL_SPACING_S = 6;
+const FINAL_CALL_NM = 4;
 
 interface SpawnCandidate {
   lat: number;
@@ -38,9 +48,14 @@ export class AircraftManager {
   private nextSpawnIn: number;
   private usedCallsigns = new Set<string>();
   // ATC reaction delay: pilot reads back, then acts (1–3 s)
-  private pendingCommands: Array<{ id: string; cmd: ATCCommand; executeAt: number }> = [];
+  private pendingCommands: Array<{ id: string; cmd: ATCCommand; executeAt: number; readback?: Phrase }> = [];
   // Track active conflict/warning pairs to emit clear on resolution
   private activePairs = new Map<string, 'conflict' | 'warning'>(); // key: sorted ids
+  private radio: RadioContext | null = null;
+  private radioSeq = 0;
+  private simTime = 0;
+  private callIns = new Map<string, number>(); // aircraftId → Simulationszeit des Erstanrufs
+  private lastCallAt = -Infinity;
 
   constructor() {
     this.nextSpawnIn = this.randomSpawnInterval();
@@ -57,6 +72,12 @@ export class AircraftManager {
     this.airport = airport;
     this.stars = stars;
     this.spawnStars = stars;
+    this.radio = radioContext(airport, stars);
+    // Neuer Platz, neuer Verkehr: Flieger des alten Platzes nicht weiterfliegen lassen
+    this.aircraft.clear();
+    this.pendingCommands = [];
+    this.activePairs.clear();
+    this.callIns.clear();
   }
 
   setSpawnStars(stars: STAR[]): void {
@@ -80,15 +101,41 @@ export class AircraftManager {
   }
 
   applyCommand(id: string, cmd: ATCCommand, timeScale = 1): void {
-    // Queue with pilot reaction delay (1–3 s), scaled by simulation speed
+    // Queue with pilot reaction delay (1–3 s), scaled by simulation speed.
+    // Befehle an denselben Flieger in Reihenfolge ausführen (z. B. erst ILS, dann Landefreigabe)
     const delaySec = (1 + Math.random() * 2) / timeScale;
-    this.pendingCommands.push({ id, cmd, executeAt: performance.now() + delaySec * 1000 });
+    const queued = this.pendingCommands.filter((c) => c.id === id);
+    const executeAt = Math.max(performance.now() + delaySec * 1000, ...queued.map((c) => c.executeAt + 500 / timeScale));
+    let readback: Phrase | undefined;
+    const ac = this.aircraft.get(id);
+    if (ac && this.radio) {
+      // Landefreigabe direkt nach der ILS-Freigabe: Bahn aus dem noch wartenden ILS-Befehl
+      const ils = queued.map((c) => c.cmd).filter((c) => c.type === 'ils').pop();
+      const phrases = instruction(ac, cmd, this.radio, ils?.type === 'ils' ? ils.runwayId : ac.assignedRunway);
+      if (phrases) {
+        this.say('atc', ac, atcCall(ac, phrases.atc, !ac.identified));
+        readback = readbackCall(ac, phrases.readback);
+        // Wer angesprochen wurde, meldet sich nicht mehr erstmals
+        this.aircraft.set(id, { ...ac, contacted: true, identified: true });
+        this.callIns.delete(id);
+      }
+    }
+    this.pendingCommands.push({ id, cmd, executeAt, readback });
   }
 
-  private executeCommand(id: string, cmd: ATCCommand): void {
+  private say(from: RadioMessage['from'], ac: Aircraft, phrase: Phrase): void {
+    const voice = from === 'atc' ? { voice: 'atc' as const, speaker: 0 } : pilotVoice(ac.callsign);
+    this.emit({
+      type: 'radio',
+      message: { id: ++this.radioSeq, ts: Date.now(), from, aircraftId: ac.id, callsign: ac.callsign, text: phrase.text, spoken: phrase.spoken, ...voice },
+    });
+  }
+
+  private executeCommand(id: string, cmd: ATCCommand, readback?: Phrase): void {
     const ac = this.aircraft.get(id);
     if (!ac) return;
     let updated = { ...ac };
+    let applied = true;
     switch (cmd.type) {
       case 'heading':
         updated = { ...updated, targetHeading: cmd.value, turnDirection: cmd.turnDirection, directTo: undefined, state: ac.state === 'enroute' || ac.state === 'goaround' ? 'vectored' : ac.state };
@@ -101,6 +148,7 @@ export class AircraftManager {
         break;
       case 'ils': {
         const runway = this.airport?.runways.find((r) => r.id === cmd.runwayId);
+        applied = !!runway;
         if (runway) {
           updated = {
             ...updated,
@@ -131,6 +179,7 @@ export class AircraftManager {
         // Anflugpunkt + STAR: Punkt direkt anfliegen, danach der STAR folgen (hebt Anflugfreigabe auf)
         const star = this.stars.find((s) => s.id === cmd.starId);
         const idx = star ? star.waypoints.findIndex((w) => w.id === cmd.waypointId) : -1;
+        applied = !!star && idx >= 0;
         if (star && idx >= 0) {
           updated = {
             ...updated,
@@ -142,20 +191,28 @@ export class AircraftManager {
       }
       case 'land':
         // Landefreigabe nur für einen Flieger mit zugewiesenem ILS
-        if (ac.clearedILS && ac.assignedRunway) updated = { ...updated, clearedToLand: true };
+        applied = ac.clearedILS && !!ac.assignedRunway;
+        if (applied) updated = { ...updated, clearedToLand: true };
         break;
     }
     this.aircraft.set(id, updated);
+    // Rücklesen; passt die Freigabe nicht zur Lage, fragt der Pilot nach
+    if (!applied) this.say('pilot', ac, sayAgainCall(ac));
+    else if (readback) this.say('pilot', ac, readback);
   }
 
   update(dt: number, now: number): void {
     if (!this.airport) return;
 
+    this.simTime += dt;
+
     // Execute due pending commands
     const nowMs = performance.now();
     const due = this.pendingCommands.filter((c) => c.executeAt <= nowMs);
     this.pendingCommands  = this.pendingCommands.filter((c) => c.executeAt >  nowMs);
-    for (const { id, cmd } of due) this.executeCommand(id, cmd);
+    for (const { id, cmd, readback } of due) this.executeCommand(id, cmd, readback);
+
+    this.radioCallIns();
 
     // Spawn timer
     this.nextSpawnIn -= dt;
@@ -184,6 +241,7 @@ export class AircraftManager {
       } else if (updated.state === 'goaround' && ac.state !== 'goaround') {
         // Durchstarten: Freigaben weg, Bahnkurs halten, auf 4000 ft steigen – der Lotse muss neu führen
         this.emit({ type: 'goaround', callsign: updated.callsign });
+        this.say('pilot', updated, goAroundCall(updated));
         const typeData = AIRCRAFT_TYPES[updated.type];
         this.aircraft.set(id, {
           ...updated,
@@ -197,10 +255,44 @@ export class AircraftManager {
         });
       } else {
         this.aircraft.set(id, updated);
+        this.pilotReports(ac, updated, runway, star);
       }
     }
 
     this.checkSeparation();
+  }
+
+  /** Erstanrufe neuer Flieger, höchstens einer je Frame und mit Abstand zum letzten */
+  private radioCallIns(): void {
+    if (!this.radio || this.simTime - this.lastCallAt < CALL_SPACING_S) return;
+    for (const [id, at] of this.callIns) {
+      if (this.simTime < at) continue;
+      this.callIns.delete(id);
+      const ac = this.aircraft.get(id);
+      if (!ac || ac.contacted) continue;
+      this.aircraft.set(id, { ...ac, contacted: true });
+      this.say('pilot', ac, initialCall(ac, this.radio));
+      this.lastCallAt = this.simTime;
+      return;
+    }
+  }
+
+  /** Meldungen der Piloten: Localizer erfasst, kurzer Endanflug ohne Landefreigabe, Ende der STAR */
+  private pilotReports(prev: Aircraft, next: Aircraft, runway?: Runway, star?: STAR): void {
+    if (!next.contacted) return;
+    if (runway && next.state === 'established') {
+      if (prev.state !== 'established') this.say('pilot', next, establishedCall(next, runway.id));
+      const before = distanceNM(prev.lat, prev.lng, runway.thresholdLat, runway.thresholdLng);
+      const after = distanceNM(next.lat, next.lng, runway.thresholdLat, runway.thresholdLng);
+      if (!next.clearedToLand && before >= FINAL_CALL_NM && after < FINAL_CALL_NM) {
+        this.say('pilot', next, finalCall(next, runway.id, FINAL_CALL_NM));
+      }
+    }
+    const end = star?.waypoints.length ?? Infinity;
+    if ((prev.starLegIndex ?? 0) < end && (next.starLegIndex ?? 0) >= end
+      && next.state === 'enroute' && !next.clearedILS && !next.directTo) {
+      this.say('pilot', next, endOfStarCall(next));
+    }
   }
 
   private checkSeparation(): void {
@@ -351,6 +443,7 @@ export class AircraftManager {
     });
 
     this.aircraft.set(id, ac);
+    this.callIns.set(id, this.simTime + CALL_IN_MIN_S + Math.random() * (CALL_IN_MAX_S - CALL_IN_MIN_S));
     return true;
   }
 
@@ -400,6 +493,11 @@ export class AircraftManager {
       // Clear trails: rAF timestamps from prior session are incompatible with new session's now
       this.aircraft.set(ac.id, { ...ac, trail: [], conflict: false, warning: false });
       this.usedCallsigns.add(ac.callsign);
+    }
+    // Wer sich vor dem Neuladen noch nicht gemeldet hatte, ruft jetzt an
+    this.callIns.clear();
+    for (const ac of aircraft) {
+      if (!ac.contacted) this.callIns.set(ac.id, this.simTime + CALL_IN_MIN_S + Math.random() * (CALL_IN_MAX_S - CALL_IN_MIN_S));
     }
   }
 

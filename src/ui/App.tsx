@@ -13,6 +13,9 @@ import { CommandPanel } from './CommandPanel';
 import { AlertBanner } from './AlertBanner';
 import { ScorePanel } from './ScorePanel';
 import { ContextMenu, type ContextMenuState } from './ContextMenu';
+import { RadioLog } from './RadioLog';
+import { RadioVoice } from '@/services/RadioVoice';
+import { loadTelephony } from '@/game/Telephony';
 
 const SIDEBAR_W = 288;
 const MOBILE_BREAKPOINT = 700;
@@ -26,6 +29,20 @@ const SOURCE_OPTIONS: Array<{ id: SourcePreference; label: string; title: string
 const SOURCE_NAMES: Record<AirportSource, string> = {
   navdata: 'Navigraph', open: 'OurAirports', generic: 'generisch',
 };
+const RADIO_STORAGE = 'atc-radio';
+
+interface RadioPrefs {
+  log: boolean;
+  voice: boolean;
+}
+
+function loadRadioPrefs(): RadioPrefs {
+  try {
+    return { log: true, voice: true, ...JSON.parse(localStorage.getItem(RADIO_STORAGE) ?? '{}') };
+  } catch {
+    return { log: true, voice: true };
+  }
+}
 
 function loadSourcePref(): SourcePreference {
   try {
@@ -45,7 +62,7 @@ export function App() {
     aircraft: [], conflicts: [], selectedId: null,
     paused: false, timeScale: 1, sweepEnabled: false, rangeNM: 80, trailLength: 6,
     pendingCmdTypes: {}, display: { ...DEFAULT_DISPLAY },
-    activeRunwayIds: [],
+    activeRunwayIds: [], radio: [],
   });
   const [airport, setAirport] = useState<Airport | null>(null);
   const [navPoints, setNavPoints] = useState<Waypoint[]>([]);
@@ -60,6 +77,33 @@ export function App() {
   const [navAvailable, setNavAvailable] = useState(false);
 
   useEffect(() => { fetchNavStatus().then(setNavAvailable); }, []);
+
+  // ── Funk: Log und Sprachausgabe ──────────────────────────────────────────
+  const [radioPrefs, setRadioPrefs] = useState<RadioPrefs>(loadRadioPrefs);
+  const [voice] = useState(() => new RadioVoice());
+  const lastRadioIdRef = useRef(0);
+  const changeRadioPrefs = useCallback((patch: Partial<RadioPrefs>) => {
+    setRadioPrefs((prev) => {
+      const next = { ...prev, ...patch };
+      try { localStorage.setItem(RADIO_STORAGE, JSON.stringify(next)); } catch { /* nur Komfort */ }
+      return next;
+    });
+  }, []);
+  useEffect(() => { void loadTelephony(); }, []);
+  useEffect(() => { voice.setEnabled(radioPrefs.voice); }, [voice, radioPrefs.voice]);
+  useEffect(() => {
+    // Browser geben Ton erst nach einer Nutzeraktion frei
+    const unlock = () => voice.unlock();
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+    return () => { window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
+  }, [voice]);
+  useEffect(() => {
+    const fresh = gameState.radio.filter((m) => m.id > lastRadioIdRef.current);
+    if (fresh.length === 0) return;
+    lastRadioIdRef.current = fresh[fresh.length - 1].id;
+    if (radioPrefs.voice) fresh.forEach((m) => voice.enqueue(m));
+  }, [gameState.radio, radioPrefs.voice, voice]);
 
   const changeSourcePref = useCallback((pref: SourcePreference) => {
     setSourcePref(pref);
@@ -90,6 +134,7 @@ export function App() {
   useEffect(() => {
     selectedIcaoRef.current = selectedIcao;
     setLoading(true);
+    voice.clear();
     fetchAirportData(selectedIcao, sourcePref).then(({ airport: ap, waypoints: wps, stars: apStars, source }) => {
       // Unbekannter Platz (weder Navigraph noch OurAirports) → beim bisherigen bleiben
       if (source === 'generic' && lastGoodIcaoRef.current) {
@@ -114,7 +159,7 @@ export function App() {
       }
       setLoading(false);
     });
-  }, [selectedIcao, sourcePref]);
+  }, [selectedIcao, sourcePref, voice]);
 
   const handleCommand = useCallback((id: string, cmd: ATCCommand) => {
     engineRef.current?.applyCommand(id, cmd);
@@ -357,7 +402,22 @@ export function App() {
             onSelectAircraft={handleSelectAircraft}
             onContextMenu={handleContextMenu}
           />
-          <DisplayBar display={gameState.display} onChange={(patch) => engineRef.current?.setDisplay(patch)} />
+          {radioPrefs.log && (
+            <RadioLog
+              messages={gameState.radio}
+              selectedId={gameState.selectedId}
+              onSelect={handleSelectAircraft}
+              height={isMobile ? 64 : 112}
+            />
+          )}
+          <DisplayBar
+            display={gameState.display}
+            onChange={(patch) => engineRef.current?.setDisplay(patch)}
+            extra={[
+              { label: 'RADIO', title: 'Funk-Log', active: radioPrefs.log, onClick: () => changeRadioPrefs({ log: !radioPrefs.log }) },
+              { label: 'VOICE', title: 'Funk hörbar', active: radioPrefs.voice, onClick: () => changeRadioPrefs({ voice: !radioPrefs.voice }) },
+            ]}
+          />
         </div>
       )}
 
@@ -388,30 +448,41 @@ const DISPLAY_TOGGLES: { key: keyof DisplayOptions; label: string }[] = [
   { key: 'stars',    label: 'STARs'   },
 ];
 
-function DisplayBar({ display, onChange }: { display: DisplayOptions; onChange: (patch: Partial<DisplayOptions>) => void }) {
+interface ExtraToggle {
+  label: string;
+  title: string;
+  active: boolean;
+  onClick: () => void;
+}
+
+const toggleStyle = (active: boolean): React.CSSProperties => ({
+  background: active ? '#0a3020' : 'transparent',
+  border: `1px solid ${active ? '#00cc66' : '#1a4428'}`,
+  color: active ? '#00ff88' : '#446644',
+  fontFamily: '"Courier New", monospace',
+  fontSize: 10,
+  padding: '2px 8px',
+  cursor: 'pointer',
+  borderRadius: 2,
+  letterSpacing: 1,
+});
+
+function DisplayBar({ display, onChange, extra = [] }: { display: DisplayOptions; onChange: (patch: Partial<DisplayOptions>) => void; extra?: ExtraToggle[] }) {
   return (
     <div style={{
       display: 'flex', gap: 4, padding: '4px 8px',
       background: '#050e05', borderTop: '1px solid #0a2010',
-      flexShrink: 0,
+      flexShrink: 0, flexWrap: 'wrap',
     }}>
       {DISPLAY_TOGGLES.map(({ key, label }) => (
-        <button
-          key={key}
-          onClick={() => onChange({ [key]: !display[key] })}
-          style={{
-            background: display[key] ? '#0a3020' : 'transparent',
-            border: `1px solid ${display[key] ? '#00cc66' : '#1a4428'}`,
-            color: display[key] ? '#00ff88' : '#446644',
-            fontFamily: '"Courier New", monospace',
-            fontSize: 10,
-            padding: '2px 8px',
-            cursor: 'pointer',
-            borderRadius: 2,
-            letterSpacing: 1,
-          }}
-        >
+        <button key={key} onClick={() => onChange({ [key]: !display[key] })} style={toggleStyle(display[key])}>
           {label}
+        </button>
+      ))}
+      <div style={{ flex: 1 }} />
+      {extra.map((t) => (
+        <button key={t.label} title={t.title} onClick={t.onClick} style={toggleStyle(t.active)}>
+          {t.label}
         </button>
       ))}
     </div>

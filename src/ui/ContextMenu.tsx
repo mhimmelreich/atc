@@ -295,7 +295,7 @@ export function ContextMenu({ menu, airport, onCommand, onClose, onHeadingPrevie
             <span style={{ float: 'right', fontSize: 10, fontWeight: 'normal', letterSpacing: 0,
               color: starPending ? '#ffaa00' : '#b478ff' }}>
               {starPending ? '⧖ ' : ''}
-              {star && ac.state === 'enroute' && !ac.directTo ? (star.name ?? star.id) : ''}
+              {star && ac.state === 'enroute' && !ac.directTo ? (star.fullName ?? star.name ?? star.id) : ''}
             </span>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap' }}>
@@ -316,7 +316,7 @@ export function ContextMenu({ menu, airport, onCommand, onClose, onHeadingPrevie
               return (
                 <div key={name} style={{ ...ITEM_STYLE, cursor: 'default', color: '#c89aff', gap: 6, padding: '4px 12px' }}>
                   <span style={{ whiteSpace: 'nowrap' }}>
-                    {name} <span style={{ color: '#6a4a90', fontSize: 9 }}>{legsLeft} WPT</span>
+                    {variants[0].fullName ?? name} <span style={{ color: '#6a4a90', fontSize: 9 }}>{legsLeft} WPT</span>
                   </span>
                   <span style={{ display: 'flex', gap: 3 }}>
                     {variants.map((st) => {

@@ -2,10 +2,13 @@
 import type { Airport } from '@/types/airport';
 import type { Aircraft, ATCCommand, ConflictPair } from '@/types/aircraft';
 import type { Waypoint, STAR } from '@/types/navdata';
+import type { RadioMessage } from '@/types/radio';
 import { AircraftManager } from './AircraftManager';
 import { RadarRenderer, DEFAULT_DISPLAY, type DisplayOptions } from './RadarRenderer';
 import { headingDiff } from '@/utils/aviation';
 import { SCORE_LANDING, SCORE_GOAROUND, SCORE_SEPARATION_VIOLATION, SCORE_COLLISION } from './constants';
+
+const RADIO_LOG_SIZE = 50;
 
 export interface GameState {
   score: number;
@@ -24,6 +27,8 @@ export interface GameState {
   display: DisplayOptions;
   /** Active landing runway IDs — only these runways' ILS is available (empty = all) */
   activeRunwayIds: string[];
+  /** Letzte Funkmeldungen, älteste zuerst */
+  radio: RadioMessage[];
 }
 
 export { type DisplayOptions };
@@ -68,6 +73,7 @@ export class GameEngine {
     pendingCmdTypes: {},
     display: { ...DEFAULT_DISPLAY },
     activeRunwayIds: [],
+    radio: [],
   };
   get rangeNM(): number { return this.state.rangeNM; }
   private onStateChange: StateCallback;
@@ -111,6 +117,9 @@ export class GameEngine {
             );
           }
           break;
+        case 'radio':
+          this.state = { ...this.state, radio: [...this.state.radio.slice(1 - RADIO_LOG_SIZE), event.message!] };
+          break;
       }
     });
   }
@@ -136,7 +145,7 @@ export class GameEngine {
     const activeRunwayIds = ilsRunways.length > 0
       ? this.pickPrimaryDirection(ilsRunways).map((r) => r.id)
       : [];
-    this.state = { ...this.state, activeRunwayIds };
+    this.state = { ...this.state, activeRunwayIds, radio: [] };
     this.manager.setSpawnStars(this.activeStars());
     for (let i = 0; i < 3; i++) this.manager.forceSpawn();
   }
