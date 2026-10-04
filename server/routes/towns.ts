@@ -1,4 +1,5 @@
-// Umrisse und Namen von Ortschaften rund um einen Punkt (WATCH), aus OpenStreetMap (ODbL) über Overpass.
+// Umrisse und Namen von Ortschaften rund um einen Punkt (WATCH), aus OpenStreetMap (ODbL) über Overpass;
+// fehlende Einwohnerzahlen aus Wikidata (CC0).
 // Gemeindegrenzen (admin_level 8) mit Einwohnerzahl ab TOWN_MIN_POP; vereinfacht und auf Platte zwischengespeichert.
 import { Router } from 'express';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -9,6 +10,7 @@ const router = Router();
 const DATA_DIR = process.env.TOWNS_DIR ?? 'data/towns';
 const OVERPASS = 'https://overpass-api.de/api/interpreter';
 const OVERPASS_TRIES = 4;
+const WIKIDATA = 'https://query.wikidata.org/sparql';
 const USER_AGENT = 'atc-game (games.himmelreich.cloud)';
 const RADIUS_M = 110_000;
 const TOWN_MIN_POP = 5000;
@@ -149,6 +151,34 @@ function inside(lat: number, lng: number, rings: Town['rings']): boolean {
 }
 
 
+/** Einwohnerzahlen aus Wikidata (P1082, CC0) für Orte, bei denen OSM keine hat */
+async function wikidataPopulations(ids: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const valid = [...new Set(ids.filter((id) => /^Q\d+$/.test(id)))];
+  for (let i = 0; i < valid.length; i += 300) {
+    const query = `SELECT ?item ?pop WHERE { VALUES ?item { ${valid.slice(i, i + 300).map((id) => `wd:${id}`).join(' ')} } ?item wdt:P1082 ?pop }`;
+    try {
+      const res = await fetch(WIKIDATA, {
+        method: 'POST',
+        headers: { 'User-Agent': USER_AGENT, Accept: 'application/sparql-results+json', 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `query=${encodeURIComponent(query)}`,
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!res.ok) throw new Error(`Wikidata HTTP ${res.status}`);
+      const data = (await res.json()) as { results: { bindings: Array<{ item: { value: string }; pop: { value: string } }> } };
+      for (const b of data.results.bindings) {
+        const id = b.item.value.split('/').pop()!;
+        const pop = Math.round(Number(b.pop.value));
+        if (Number.isFinite(pop) && pop > (out.get(id) ?? 0)) out.set(id, pop);
+      }
+    } catch (err) {
+      // Ohne Wikidata fehlen eben die Orte ohne Einwohnerzahl in OSM
+      console.error('towns: Wikidata:', (err as Error).message);
+    }
+  }
+  return out;
+}
+
 /**
  * Ortschaften als Gemeindegrenzen (admin_level 8, bei kreisfreien Städten die Stadt auf Ebene 6) mit Name und
  * Einwohnerzahl. Die Einwohnerzahl steht mal an der Grenze, mal am Ortsknoten (place=city/town/village), daher
@@ -167,13 +197,16 @@ async function fetchTowns(lat: number, lon: number): Promise<Town[]> {
   for (const n of nodes) nodesByName.set(n.tags!.name, [...(nodesByName.get(n.tags!.name) ?? []), n]);
   const nodePop = (name: string) => Math.max(0, ...(nodesByName.get(name) ?? []).map((n) => popOf(n.tags) || 0));
 
-  // Gemeinden und kreisfreie Städte (nicht die Landkreise) mit genug Einwohnern
-  const candidates = index
+  // Gemeinden und kreisfreie Städte (nicht die Landkreise); Einwohner von der Grenze, vom Ortsknoten oder aus Wikidata
+  const munis = index
     .filter((r) => {
       const t = r.tags!;
-      return t.admin_level === '8' || (t['de:place'] !== 'county' && t.border_type !== 'county' && !/kreis/i.test(t.name));
+      return t.admin_level === '8' || t['de:place'] === 'city' || (t['de:place'] !== 'county' && !/kreis/i.test(t.name));
     })
-    .map((r) => ({ id: r.id, name: r.tags!.name, level: Number(r.tags!.admin_level), pop: popOf(r.tags) || nodePop(r.tags!.name) }))
+    .map((r) => ({ id: r.id, name: r.tags!.name, level: Number(r.tags!.admin_level), wikidata: r.tags!.wikidata, pop: popOf(r.tags) || nodePop(r.tags!.name) }));
+  const wdPop = await wikidataPopulations(munis.filter((m) => !m.pop && m.wikidata).map((m) => m.wikidata!));
+  const candidates = munis
+    .map((m) => ({ ...m, pop: m.pop || (m.wikidata ? wdPop.get(m.wikidata) ?? 0 : 0) }))
     .filter((c) => c.pop >= TOWN_MIN_POP);
   // Kreisfreie Stadt auf Ebene 6 und gleichnamige Gemeinde auf 8 gibt es selten doppelt: Ebene 8 gewinnt
   const byName = new Map<string, (typeof candidates)[number]>();
