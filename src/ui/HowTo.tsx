@@ -137,7 +137,7 @@ function Approach() {
         ]} />
       </Phase>
       <Phase n={5} title="Endanflug und Landefreigabe">
-        <P>Auf dem Endanflug hältst du mindestens 3 NM Abstand zum Vordermann. Die Landefreigabe gibst du, sobald die Bahn frei ist, mit dem aktuellen Bodenwind. Fehlt sie, erinnert der Pilot 4 NM vor der Schwelle daran; bei 1 NM startet er durch.</P>
+        <P>Auf dem Endanflug hältst du mindestens 3 NM Abstand zum Vordermann. Die Landefreigabe gibt nur der Turm: erst nach CONTACT TOWER, sobald die Bahn frei ist, mit dem aktuellen Bodenwind. Fehlt sie, erinnert der Pilot 4 NM vor der Schwelle daran; bei 1 NM startet er durch.</P>
         <Radio lines={[
           ['PILOT', 'Lufthansa 427, 4 miles final runway 25R'],
           ['TWR', 'Lufthansa 427, wind 250° 8 kt, runway 25R, cleared to land'],
@@ -167,7 +167,7 @@ function Commands() {
           ['Anflugpunkt und STAR', 'Menü ENTRY → STAR: Punkt wählen, dann STAR und Bahn', 'proceed direct KERAX, then KERAX 6A arrival, expect runway 25R'],
           ['ILS', 'Knopf ILS RWY oder Menü RUNWAY / ILS', 'cleared ILS approach runway 25R'],
           ['Übergabe an den Turm', 'Knopf CONTACT TOWER oder Menü, erscheint nach der ILS-Freigabe', 'contact Frankfurt Tower 118.780'],
-          ['Landefreigabe', 'Knopf CLEARED TO LAND, erscheint nach der ILS-Freigabe', 'wind 250° 8 kt, runway 25R, cleared to land'],
+          ['Landefreigabe', 'Knopf CLEARED TO LAND, erscheint nach der Übergabe an den Turm', 'wind 250° 8 kt, runway 25R, cleared to land'],
         ]}
       />
       <H>STATUS AUF DEM STREIFEN</H>

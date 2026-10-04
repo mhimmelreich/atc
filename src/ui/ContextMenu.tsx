@@ -387,7 +387,7 @@ export function ContextMenu({ menu, airport, onCommand, onClose, onHeadingPrevie
               </HoverItem>
             )
           )}
-          {ac.clearedILS && ac.assignedRunway && (
+          {ac.clearedILS && ac.assignedRunway && ac.tower && (
             ac.clearedToLand ? (
               <div style={{ ...ITEM_STYLE, cursor: 'default', color: '#00ff88' }}>
                 <span>Cleared to land RWY {ac.assignedRunway}</span>

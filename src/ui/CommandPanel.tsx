@@ -214,7 +214,7 @@ export function CommandPanel({ selected, airport, onCommand, activeRunwayIds = [
                 {selected.tower ? '✓ ON TOWER' : towerPending ? '⧖ CONTACT TOWER' : 'CONTACT TOWER'} {tower.freq ?? ''}
               </button>
             )}
-            {selected.clearedILS && selected.assignedRunway && (
+            {selected.clearedILS && selected.assignedRunway && selected.tower && (
               <button
                 onClick={() => !selected.clearedToLand && onCommand(selected.id, { type: 'land' })}
                 style={{
