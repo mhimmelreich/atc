@@ -52,6 +52,8 @@ const TOWER_CALL_MAX_S = 6;
 const ORIGIN_MIN_NM = 150;
 // Bahnwechsel: neue STAR nur über einen Punkt in diesem Umkreis vor dem Flieger
 const RESTAR_SEARCH_NM = 40;
+// Direkt zum neuen STAR-Punkt nicht quer über den Platz: Mindestabstand der Strecke zum Platz
+const RESTAR_FIELD_CLEAR_NM = 6;
 
 interface SpawnCandidate {
   lat: number;
@@ -134,8 +136,10 @@ export class AircraftManager {
       const old = this.stars.find((s) => s.id === ac.starId);
       const remaining = old?.waypoints.slice(ac.starLegIndex ?? 0) ?? [];
       let pick: { starId: string; waypointId: string } | undefined;
-      // Erster noch anzufliegender Punkt, auf dem auch eine neue STAR liegt
+      const clear = (w: { lat: number; lng: number }) => !this.crossesField(ac, w);
+      // Erster noch anzufliegender Punkt, auf dem auch eine neue STAR liegt (ohne den Platz zu überfliegen)
       for (const wp of remaining) {
+        if (!clear(wp)) continue;
         const st = stars.find((s) => s.waypoints.some((w) => w.id === wp.id));
         if (st) { pick = { starId: st.id, waypointId: wp.id }; break; }
       }
@@ -146,12 +150,25 @@ export class AircraftManager {
           for (const w of st.waypoints) {
             const dist = distanceNM(ac.lat, ac.lng, w.lat, w.lng);
             const ahead = Math.abs(headingDiff(ac.headingDeg, bearingBetween(ac.lat, ac.lng, w.lat, w.lng))) < 90;
-            if (ahead && dist < best) { best = dist; pick = { starId: st.id, waypointId: w.id }; }
+            if (ahead && dist < best && clear(w)) { best = dist; pick = { starId: st.id, waypointId: w.id }; }
           }
         }
       }
       if (pick) this.applyCommand(ac.id, { type: 'star', ...pick }, timeScale);
     }
+  }
+
+  /** Führt die direkte Strecke vom Flieger zum Punkt nah über den Platz (nach einem Bahnwechsel unrealistisch)? */
+  private crossesField(ac: { lat: number; lng: number }, w: { lat: number; lng: number }): boolean {
+    if (!this.airport) return false;
+    const cos = Math.cos((this.airport.lat * Math.PI) / 180);
+    // Ebene Näherung in NM, Platz im Ursprung
+    const ax = (ac.lng - this.airport.lng) * 60 * cos, ay = (ac.lat - this.airport.lat) * 60;
+    const bx = (w.lng - this.airport.lng) * 60 * cos, by = (w.lat - this.airport.lat) * 60;
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2));
+    return Math.hypot(ax + dx * t, ay + dy * t) < RESTAR_FIELD_CLEAR_NM;
   }
 
   setSpawning(enabled: boolean): void {
