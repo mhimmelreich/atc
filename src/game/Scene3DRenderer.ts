@@ -5,6 +5,7 @@ import type { STAR, Waypoint } from '@/types/navdata';
 import type { RenderOptions } from './RadarRenderer';
 import { destinationPoint, toRad } from '@/utils/geo';
 import { typeData } from './constants';
+import { aircraftSilhouette } from './aircraftSymbol';
 
 /** Höhen werden überhöht, sonst liegt bei 80 NM alles platt am Boden */
 export const ALT_EXAGGERATION = 4;
@@ -475,17 +476,12 @@ export class Scene3DRenderer {
     const ahead = destinationPoint(ac.lat, ac.lng, ac.headingDeg, 1);
     const q = this.proj(this.world(ahead.lat, ahead.lng, ac.altitudeFt));
     const rot = q ? Math.atan2(q.x - p.x, -(q.y - p.y)) : 0;
-    const size = selected ? 9 : 7;
+    const size = selected ? 12 : 10;
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(rot);
     ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(0, -size);
-    ctx.lineTo(size * 0.55, size * 0.65);
-    ctx.lineTo(0, size * 0.3);
-    ctx.lineTo(-size * 0.55, size * 0.65);
-    ctx.closePath();
+    aircraftSilhouette(ctx, size);
     ctx.fill();
     if (selected) { ctx.strokeStyle = COL.WHITE; ctx.lineWidth = 1.5; ctx.stroke(); }
     ctx.restore();
@@ -497,18 +493,18 @@ export class Scene3DRenderer {
       ctx.fillStyle = color;
       ctx.font = `${selected ? 'bold ' : ''}11px "Courier New"`;
       ctx.textAlign = 'left';
-      ctx.fillText(ac.callsign + (wake === 'H' || wake === 'J' ? ` ${wake}` : ''), p.x + 12, p.y - 4);
-      ctx.fillText(`FL${fl} ${vs} ${Math.round(ac.speedKts)}kt`, p.x + 12, p.y + 8);
+      ctx.fillText(ac.callsign + (wake === 'H' || wake === 'J' ? ` ${wake}` : ''), p.x + 15, p.y - 4);
+      ctx.fillText(`FL${fl} ${vs} ${Math.round(ac.speedKts)}kt`, p.x + 15, p.y + 8);
       if (ac.clearedILS && ac.assignedRunway) {
         ctx.fillStyle = ac.clearedToLand ? '#00ff88' : ac.state === 'established' ? '#ffaa00' : '#4488ff';
-        ctx.fillText(`${ac.clearedToLand ? 'LND' : 'ILS'}${ac.assignedRunway}`, p.x + 12, p.y + 20);
+        ctx.fillText(`${ac.clearedToLand ? 'LND' : 'ILS'}${ac.assignedRunway}`, p.x + 15, p.y + 20);
       }
     }
     if (selected) {
       ctx.strokeStyle = color;
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, 16, 0, Math.PI * 2);
       ctx.stroke();
     }
   }

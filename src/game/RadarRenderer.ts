@@ -2,6 +2,7 @@
 import type { Aircraft, ConflictPair, TrailPoint } from '@/types/aircraft';
 import type { LiveAircraft, LiveInbound } from '@/types/live';
 import { typeData } from './constants';
+import { aircraftSilhouette } from './aircraftSymbol';
 import type { Airport, AirportLayer, OsmWay } from '@/types/airport';
 import type { Waypoint, STAR } from '@/types/navdata';
 import { destinationPoint, toRad } from '@/utils/geo';
@@ -898,18 +899,13 @@ export class RadarRenderer {
     else if (ac.state === 'established' || ac.state === 'intercepting') color = C.AC_BLUE;
     else if (ac.state === 'vectored')    color = C.AC_YELLOW;
 
-    const size = selected ? 9 : 7;
+    const size = selected ? 12 : 10;
 
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(toRad(ac.headingDeg));
     ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(0, -size);
-    ctx.lineTo(size * 0.55, size * 0.65);
-    ctx.lineTo(0, size * 0.3);
-    ctx.lineTo(-size * 0.55, size * 0.65);
-    ctx.closePath();
+    aircraftSilhouette(ctx, size);
     ctx.fill();
     if (selected) { ctx.strokeStyle = C.AC_WHITE; ctx.lineWidth = 1.5; ctx.stroke(); }
     ctx.restore();
@@ -923,13 +919,13 @@ export class RadarRenderer {
       ctx.fillStyle  = color;
       ctx.font       = `${selected ? 'bold ' : ''}11px "Courier New"`;
       ctx.textAlign  = 'left';
-      ctx.fillText(ac.callsign, p.x + 12, p.y - 4);
-      ctx.fillText(`FL${fl.toString().padStart(3, '0')} ${vs}`, p.x + 12, p.y + 8);
-      ctx.fillText(`${spd}kt`, p.x + 12, p.y + 20);
+      ctx.fillText(ac.callsign, p.x + 15, p.y - 4);
+      ctx.fillText(`FL${fl.toString().padStart(3, '0')} ${vs}`, p.x + 15, p.y + 8);
+      ctx.fillText(`${spd}kt`, p.x + 15, p.y + 20);
       if (ac.clearedILS && ac.assignedRunway) {
         // ILS zugewiesen → "ILS25L"; mit Landefreigabe "LND25L"; etabliert ohne Freigabe orange
         const tag = `${ac.clearedToLand ? 'LND' : 'ILS'}${ac.assignedRunway}`;
-        const tagX = p.x + 12 + ctx.measureText(`${spd}kt `).width;
+        const tagX = p.x + 15 + ctx.measureText(`${spd}kt `).width;
         ctx.fillStyle = ac.clearedToLand ? '#00ff88' : ac.state === 'established' ? '#ffaa00' : '#4488ff';
         ctx.fillText(tag, tagX, p.y + 20);
         ctx.fillStyle = color;
@@ -940,7 +936,7 @@ export class RadarRenderer {
         const badgeColor = wake === 'J' ? '#ff6666' : '#ffaa00';
         ctx.font = 'bold 9px "Courier New"';
         ctx.fillStyle = badgeColor;
-        ctx.fillText(wake, p.x + 12, p.y + 30);
+        ctx.fillText(wake, p.x + 15, p.y + 30);
       }
     }
 
@@ -948,7 +944,7 @@ export class RadarRenderer {
       ctx.strokeStyle = color;
       ctx.lineWidth   = 1;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, 16, 0, Math.PI * 2);
       ctx.stroke();
     }
   }
