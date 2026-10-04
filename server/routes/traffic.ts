@@ -34,6 +34,7 @@ interface RawAircraft {
   track?: number;
   true_heading?: number;
   baro_rate?: number;
+  nav_altitude_mcp?: number;
   geom_rate?: number;
   squawk?: string;
   lat?: number;
@@ -55,6 +56,8 @@ export interface LiveAircraftDto {
   track: number | null;
   vs: number | null;
   squawk?: string;
+  /** Im Autopiloten gewählte Höhe (MCP/FCU), also die zuletzt freigegebene Höhe */
+  selAltFt?: number;
   /** Flugroute als ICAO-Kette, z. B. "EIDW-EDDF" (nur wenn bekannt und zur Position passend) */
   route?: string;
   /** Alter der Position in Sekunden zum Zeitpunkt der Antwort */
@@ -145,6 +148,8 @@ function mapAircraft(a: RawAircraft): Snapshot['aircraft'][number] | null {
     track: track ?? null,
     vs: a.baro_rate ?? a.geom_rate ?? null,
     ...(a.squawk ? { squawk: a.squawk } : {}),
+    // Gerät meldet z. B. 4992 statt 5000: auf 100 ft runden
+    ...(typeof a.nav_altitude_mcp === 'number' && a.nav_altitude_mcp > 0 ? { selAltFt: Math.round(a.nav_altitude_mcp / 100) * 100 } : {}),
     seenPos: a.seen_pos ?? 0,
   };
 }

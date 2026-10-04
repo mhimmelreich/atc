@@ -9,9 +9,9 @@ import { typeData } from './constants';
 import { headingDiff } from '@/utils/aviation';
 import { bearingBetween, distanceNM } from '@/utils/geo';
 
-// Erstanruf, solange der Anflug zwischen diesen Entfernungen zum Platz ist
-const CALL_IN_MAX_NM = 40;
-const CALL_IN_MIN_NM = 15;
+// Erstanruf beim Einflug in den Anflugbereich (wie in echt etwa FL100 bis FL140), solange er zwischen diesen Entfernungen ist
+const CALL_IN_MAX_NM = 60;
+const CALL_IN_MIN_NM = 25;
 const CALL_IN_MIN_FT = 4000;
 // Näher am Platz hat der Tower den Flieger: keine Übernahme mehr
 const TAKEOVER_MIN_NM = 8;
@@ -63,8 +63,9 @@ export function callsIn(ac: LiveAircraft, inb: Inbound, airport: Airport): boole
   return inb.kind === 'route' && dist <= CALL_IN_MAX_NM && dist >= CALL_IN_MIN_NM && (ac.altFt ?? 0) >= CALL_IN_MIN_FT;
 }
 
-/** Freigegebene Höhe beim Übernehmen: im Sinkflug etwa 2000 ft tiefer, aber nicht unter 4000 ft; sonst die aktuelle */
-function takeoverLevel(altFt: number, vs: number): number {
+/** Freigegebene Höhe beim Übernehmen: die echte aus dem Autopiloten; ohne sie im Sinkflug etwa 2000 ft tiefer, aber nicht unter 4000 ft, sonst die aktuelle */
+function takeoverLevel(altFt: number, vs: number, selAltFt?: number): number {
+  if (selAltFt !== undefined && selAltFt >= 1000 && selAltFt <= altFt + 300) return selAltFt;
   const level = Math.max(1000, Math.round(altFt / 1000) * 1000);
   if (vs > -300) return level;
   return Math.max(Math.min(level, 4000), Math.floor((altFt - 2000) / 1000) * 1000);
@@ -151,7 +152,7 @@ export function liveToAircraft(ac: LiveAircraft, ctx: TakeoverContext, origin?: 
     speedKts: gs,
     verticalSpeedFpm: ac.vs ?? 0,
     targetHeading: track,
-    targetAltitude: called && called.targetAltitude <= alt + 300 ? called.targetAltitude : takeoverLevel(alt, ac.vs ?? 0),
+    targetAltitude: called && called.targetAltitude <= alt + 300 ? called.targetAltitude : takeoverLevel(alt, ac.vs ?? 0, ac.selAltFt),
     // Unter FL100 höchstens 250 kt
     targetSpeed: alt < 10000 ? Math.min(gs, 250) : gs,
     state: entry ? 'enroute' : 'vectored',

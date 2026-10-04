@@ -16,6 +16,8 @@ export interface LiveAircraft {
   track: number | null;
   vs: number | null;
   squawk?: string;
+  /** Im Autopiloten gewählte Höhe (MCP/FCU), also die zuletzt freigegebene Höhe */
+  selAltFt?: number;
   /** Flugroute als ICAO-Kette, z. B. "EIDW-EDDF" (falls bekannt) */
   route?: string;
   /** Zeitpunkt der Position (Date.now()) */

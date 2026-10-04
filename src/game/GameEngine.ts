@@ -218,7 +218,7 @@ export class GameEngine {
     this.liveTrails = trails;
     this.detectRunwayInUse(list);
 
-    // Anflüge zum gewählten Platz; zwischen 40 und 15 NM melden sie sich (nächster zuerst)
+    // Anflüge zum gewählten Platz; zwischen 60 und 25 NM melden sie sich (nächster zuerst)
     this.liveInbound.clear();
     const calls: Array<{ ac: LiveAircraft; dist: number }> = [];
     const airport = this.airport;
