@@ -5,6 +5,7 @@ import airportRouter from './routes/airport.js';
 import trafficRouter from './routes/traffic.js';
 import navdataRouter from './routes/navdata.js';
 import opendataRouter from './routes/opendata.js';
+import ttsRouter from './routes/tts.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
@@ -14,6 +15,9 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 app.set('trust proxy', 1);
 
 app.use(express.json());
+
+// Sprachausgabe vor dem allgemeinen Limit einhängen: sie hat ein eigenes, höheres
+app.use('/api/tts', ttsRouter);
 
 // Rate limiting
 const limiter = rateLimit({

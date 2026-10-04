@@ -1,0 +1,10 @@
+# Piper-Sprachdienst für den Funkverkehr (nur intern erreichbar, atc-api reicht durch)
+FROM python:3.12-slim
+RUN pip install --no-cache-dir piper-tts==1.8.0
+# Frei lizenzierte Stimmen beim Build laden: Joe (CC0), LibriTTS-R und VCTK (CC BY 4.0)
+RUN python -m piper.download_voices en_US-joe-medium en_US-libritts_r-medium en_GB-vctk-medium --data-dir /voices
+WORKDIR /app
+COPY tts/server.py ./
+ENV VOICE_DIR=/voices PORT=5002
+EXPOSE 5002
+CMD ["python", "server.py"]

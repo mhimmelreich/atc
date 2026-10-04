@@ -1,0 +1,9 @@
+# Nicht in den Build-Kontext: Abhängigkeiten werden im Image installiert,
+# Daten (u. a. die lizenzierte Navigraph-DB) kommen per Volume
+.git
+node_modules
+**/node_modules
+dist
+data
+lnm_*.zip
+lnm_*.exe

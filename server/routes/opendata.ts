@@ -32,17 +32,17 @@ let data: OpenData | null = null;
 let loading: Promise<OpenData> | null = null;
 
 // ── CSV laden ────────────────────────────────────────────────────────────────
-async function ensureFile(name: string): Promise<string> {
-  const path = join(DATA_DIR, `${name}.csv`);
+async function ensureFile(file: string, url: string): Promise<string> {
+  const path = join(DATA_DIR, file);
   const fresh = existsSync(path) && Date.now() - statSync(path).mtimeMs < MAX_AGE_MS;
   if (fresh) return readFileSync(path, 'utf8');
   try {
-    const res = await fetch(`${BASE_URL}/${name}.csv`, { signal: AbortSignal.timeout(60_000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     mkdirSync(DATA_DIR, { recursive: true });
     writeFileSync(path, text);
-    console.log(`opendata: ${name}.csv aktualisiert`);
+    console.log(`opendata: ${file} aktualisiert`);
     return text;
   } catch (err) {
     // Download fehlgeschlagen → veraltete Datei ist besser als keine
@@ -76,7 +76,7 @@ function parseCsv(text: string): Row[] {
 async function loadData(): Promise<OpenData> {
   if (data) return data;
   loading ??= (async () => {
-    const [airports, runways, navaids] = await Promise.all(FILES.map(async (f) => parseCsv(await ensureFile(f))));
+    const [airports, runways, navaids] = await Promise.all(FILES.map(async (f) => parseCsv(await ensureFile(`${f}.csv`, `${BASE_URL}/${f}.csv`))));
     const byIdent = new Map<string, Row>();
     for (const a of airports) {
       if (a.type === 'closed') continue;
@@ -162,6 +162,39 @@ function navaidType(type: string): Waypoint['type'] | null {
   if (type.startsWith('NDB')) return 'ndb';
   return null;
 }
+
+// ── Funk-Rufnamen der Airlines (OpenFlights, ODbL) ──────────────────────────
+// ICAO-Präfix → Rufname, z. B. DLH → LUFTHANSA, BAW → SPEEDBIRD
+const AIRLINES_URL = 'https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat';
+let telephony: Record<string, string> | null = null;
+
+async function loadTelephony(): Promise<Record<string, string>> {
+  if (telephony) return telephony;
+  // airlines.dat hat keine Kopfzeile; \N steht für "leer"
+  const rows = parseCsv(`id,name,alias,iata,icao,callsign,country,active\n${await ensureFile('airlines.dat', AIRLINES_URL)}`);
+  const map: Record<string, string> = {};
+  const active: Record<string, boolean> = {};
+  for (const r of rows) {
+    const icao = r.icao.toUpperCase();
+    const callsign = r.callsign === '\\N' ? '' : r.callsign.trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(icao) || !callsign) continue;
+    const isActive = r.active === 'Y';
+    // Aktive Airline schlägt eingestellte mit gleichem Präfix
+    if (!map[icao] || (isActive && !active[icao])) { map[icao] = callsign; active[icao] = isActive; }
+  }
+  telephony = map;
+  return map;
+}
+
+router.get('/telephony', async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.json(await loadTelephony());
+  } catch (err) {
+    console.error('opendata: Airline-Liste nicht verfügbar:', err);
+    res.status(503).json({ error: 'Airline-Liste nicht verfügbar' });
+  }
+});
 
 // ── Route ────────────────────────────────────────────────────────────────────
 router.get('/:icao', async (req, res) => {
