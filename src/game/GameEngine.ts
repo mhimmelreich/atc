@@ -17,9 +17,10 @@ import { SCORE_LANDING, SCORE_GOAROUND, SCORE_SEPARATION_VIOLATION, SCORE_COLLIS
 const RADIO_LOG_SIZE = 50;
 const LIVE_TRAIL_MAX = 20;
 const LIVE_EXTRAPOLATE_MAX_S = 30;
-// Landerichtung aus dem Wind: erst ab etwas Wind; umgestellt wird erst bei mehr als 2 kt Rückenwind (Gegenrichtung)
-const WIND_MIN_KT = 3;
-const WIND_SWITCH_KT = 4;
+// Landerichtung aus dem Wind: wie in echt bleibt die Vorzugsrichtung, bis der Rückenwind (mit Böen) mehr als 5 kt beträgt
+const TAILWIND_MAX_KT = 5;
+// Vorzugsrichtung ohne bessere Daten: West (Westwetterlage; z. B. Frankfurt Betriebsrichtung 25)
+const PREFERRED_HEADING = 270;
 // Landerichtung aus dem echten Verkehr: Landungen der letzten 10 Minuten je Richtung
 const LIVE_FINALS_MEMORY_MS = 10 * 60_000;
 const LIVE_FINALS_SWITCH = 2;
@@ -180,7 +181,7 @@ export class GameEngine {
     this.viewLat = airport.lat;
     this.viewLng = airport.lng;
     this.manager.setAirport(airport, stars);
-    // Default: all ILS landing runways of the primary direction (lowest heading group)
+    // Standard: alle ILS-Landebahnen der Vorzugsrichtung
     const ilsRunways = airport.runways.filter((r) => r.ils && r.role !== 'departure');
     const activeRunwayIds = ilsRunways.length > 0
       ? this.pickPrimaryDirection(ilsRunways).map((r) => r.id)
@@ -465,21 +466,26 @@ export class GameEngine {
     this.trySave();
   }
 
-  /** Landerichtung mit dem meisten Gegenwind, solange weder Hand noch echter Verkehr entschieden haben */
+  /** Vorzugsrichtung, außer der Rückenwind dort ist zu stark; dann die Richtung mit dem meisten Gegenwind */
   private runwayFromWind(): void {
     const w = this.state.weather;
     const source = this.state.runwaySource;
-    if (!w || w.windDir === null || w.windKt < WIND_MIN_KT || (source !== 'default' && source !== 'wind')) return;
+    if (!w || w.windDir === null || (source !== 'default' && source !== 'wind')) return;
     const windDir = w.windDir;
+    const windKt = Math.max(w.windKt, w.gustKt ?? 0);
     // Wind und Bahnkurse sind rechtweisend
-    const headwind = (r: Runway) => w.windKt * Math.cos(((windDir - r.heading) * Math.PI) / 180);
+    const headwind = (r: Runway) => windKt * Math.cos(((windDir - r.heading) * Math.PI) / 180);
     const runways = this.landingRunways();
-    const best = runways.reduce<Runway | null>((b, r) => (!b || headwind(r) > headwind(b) ? r : b), null);
-    if (!best) return;
+    const preferred = this.pickPrimaryDirection(runways);
+    if (preferred.length === 0) return;
+    const prefHead = Math.max(...preferred.map(headwind));
+    const target = prefHead >= -TAILWIND_MAX_KT
+      ? preferred[0]
+      : runways.reduce<Runway>((b, r) => (headwind(r) > headwind(b) ? r : b), runways[0]);
     const active = runways.filter((r) => this.state.activeRunwayIds.includes(r.id));
-    const current = active.length > 0 ? Math.max(...active.map(headwind)) : -Infinity;
-    if (headwind(best) - current > WIND_SWITCH_KT) {
-      this.applyDirection(best.heading, 'wind', `Wind ${pad3(windDir)}° ${Math.round(w.windKt)} kt`);
+    const onTarget = active.some((r) => Math.abs(headingDiff(r.heading, target.heading)) < SAME_DIRECTION_DEG);
+    if (!onTarget) {
+      this.applyDirection(target.heading, 'wind', `Wind ${pad3(windDir)}° ${Math.round(w.windKt)} kt`);
     } else {
       this.state = { ...this.state, runwaySource: 'wind' };
     }
@@ -562,12 +568,9 @@ export class GameEngine {
   /** Pick all ILS runways whose heading is closest to the median heading of the set. */
   private pickPrimaryDirection(runways: import('@/types/airport').Runway[]): import('@/types/airport').Runway[] {
     if (runways.length === 0) return [];
-    // Group by reciprocal pairs: heading vs heading+180
-    // Just pick the group whose heading is smallest (conventional: lower number = primary)
-    const sorted = [...runways].sort((a, b) => a.heading - b.heading);
-    const primaryHdg = sorted[0].heading;
-    // All runways within 20° of the primary heading
-    return runways.filter((r) => Math.abs(r.heading - primaryHdg) < 20);
+    // Bahn, deren Kurs der Vorzugsrichtung am nächsten liegt, samt Parallelbahnen
+    const primary = [...runways].sort((a, b) => Math.abs(headingDiff(a.heading, PREFERRED_HEADING)) - Math.abs(headingDiff(b.heading, PREFERRED_HEADING)))[0];
+    return runways.filter((r) => Math.abs(headingDiff(r.heading, primary.heading)) < SAME_DIRECTION_DEG);
   }
 
   setPreviewAltitude(aircraftId: string | null, targetAlt: number | null): void {

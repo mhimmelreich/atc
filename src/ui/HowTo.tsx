@@ -252,7 +252,7 @@ function Controls() {
         ['3D-Ansicht', '3D unten rechts schaltet um. Ziehen verschiebt, rechte Maustaste oder Shift+Ziehen dreht und neigt, Mausrad zoomt. Am Handy: zwei Finger drehen, zoomen und (gemeinsam hoch/runter) neigen. Die Knöpfe unten rechts tun dasselbe, ⌂ setzt zurück. Höhen sind vierfach überhöht.'],
         ['Verkehr', 'TRAFFIC: SIM ist erfundener Verkehr zum Lotsen, LIVE zeigt die echten Flieger (Beschriftung unter FL200, Anflüge hellblau). Die Anzeige nennt alle Flieger (AC) und die Anflüge (IN).'],
         ['Echten Anflug übernehmen', 'LIVE: Klick oder Rechtsklick auf einen hellblauen Flieger, oder Klick auf seinen Anruf im Funk-Log'],
-        ['Landerichtung', 'ACTIVE RWY: AUTO wählt nach dem Wind oder bei LIVE nach den echten Landungen. Bahnen der Gegenrichtung schalten von Hand um (MANUELL), ein Klick auf MANUELL wieder auf AUTO.'],
+        ['Landerichtung', 'ACTIVE RWY: AUTO bleibt wie in echt bei der Vorzugsrichtung (West, z. B. Frankfurt 25), bis der Rückenwind mehr als 5 kt beträgt; bei LIVE gilt die Richtung der echten Landungen. Bahnen der Gegenrichtung schalten von Hand um (MANUELL), ein Klick auf MANUELL wieder auf AUTO.'],
         ['Funkstellen und Wetter', 'FREQ / WX: Approach und Turm mit Frequenz, Wind und QNH. Die Maus über WX zeigt das METAR.'],
         ['Zeitraffer', 'SESSION 1x bis 8x (bei LIVE nur 1x), Pause mit ⏸'],
         ['Anzeige', 'Unten LABELS, ILS, NAVAID, STARs. NAVAID zeigt Funkfeuer und die Punkte der STARs aktiver Bahnen; NAV ALL zeigt zusätzlich die Punkte inaktiver Bahnen.'],
