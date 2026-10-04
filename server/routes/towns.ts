@@ -104,7 +104,10 @@ async function overpass(query: string): Promise<OsmElement[]> {
         signal: AbortSignal.timeout(130_000),
       });
       if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
-      return ((await res.json()) as { elements?: OsmElement[] }).elements ?? [];
+      const data = (await res.json()) as { elements?: OsmElement[]; remark?: string };
+      // Überlastung oder Zeitüberschreitung meldet Overpass mit 200 und einem Hinweis statt Daten
+      if (data.remark && /error|timeout|out of memory/i.test(data.remark)) throw new Error(`Overpass: ${data.remark}`);
+      return data.elements ?? [];
     } catch (err) {
       lastErr = err as Error;
     }
@@ -194,6 +197,7 @@ router.get('/', async (req, res) => {
   if (!job) {
     job = fetchTowns(gLat, gLon)
       .then((towns) => {
+        if (towns.length === 0) throw new Error('keine Orte gefunden');
         const body = JSON.stringify({ source: 'OpenStreetMap', license: 'ODbL 1.0', towns });
         mkdirSync(DATA_DIR, { recursive: true });
         writeFileSync(file, body);
