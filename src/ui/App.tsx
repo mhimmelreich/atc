@@ -566,10 +566,11 @@ const HELP_BUTTON: React.CSSProperties = {
 };
 
 // ── Display toggle bar ────────────────────────────────────────────────────────
-const DISPLAY_TOGGLES: { key: keyof DisplayOptions; label: string }[] = [
+const DISPLAY_TOGGLES: { key: keyof DisplayOptions; label: string; title?: string }[] = [
   { key: 'labels',   label: 'LABELS'  },
   { key: 'ilsCones', label: 'ILS'     },
   { key: 'waypoints',label: 'NAVAID'  },
+  { key: 'allNavaids', label: 'NAV ALL', title: 'Auch Wegpunkte der STARs inaktiver Bahnen zeigen' },
   { key: 'stars',    label: 'STARs'   },
 ];
 
@@ -599,8 +600,8 @@ function DisplayBar({ display, onChange, extra = [] }: { display: DisplayOptions
       background: '#050e05', borderTop: '1px solid #0a2010',
       flexShrink: 0, flexWrap: 'wrap',
     }}>
-      {DISPLAY_TOGGLES.map(({ key, label }) => (
-        <button key={key} onClick={() => onChange({ [key]: !display[key] })} style={toggleStyle(display[key])}>
+      {DISPLAY_TOGGLES.map(({ key, label, title }) => (
+        <button key={key} title={title} onClick={() => onChange({ [key]: !display[key] })} style={toggleStyle(display[key])}>
           {label}
         </button>
       ))}

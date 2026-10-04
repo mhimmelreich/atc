@@ -341,7 +341,7 @@ export class GameEngine {
           airport: this.airport,
           aircraft,
           conflicts: this.conflicts,
-          waypoints: this.waypoints,
+          waypoints: this.state.display.allNavaids ? this.waypoints : this.activeWaypoints(),
           selectedId: this.state.selectedId,
           sweepEnabled: this.state.sweepEnabled,
           rangeNM: this.state.rangeNM,
@@ -507,6 +507,12 @@ export class GameEngine {
     this.trySave();
   }
 
+  /** Funkfeuer sowie Punkte auf den STARs der aktiven Bahnen */
+  private activeWaypoints(): Waypoint[] {
+    const onStar = new Set(this.activeStars().flatMap((s) => s.waypoints.map((w) => w.id)));
+    return this.waypoints.filter((w) => w.type === 'vor' || w.type === 'ndb' || onStar.has(w.id));
+  }
+
   /** STARs für die aktiven Bahnen (oder "ALL"); ohne Treffer alle STARs */
   private activeStars(): STAR[] {
     const ids = this.state.activeRunwayIds;
@@ -589,7 +595,7 @@ export class GameEngine {
       trailLength: data.trailLength,
       sweepEnabled: data.sweepEnabled,
       timeScale: data.trafficMode === 'live' ? 1 : data.timeScale ?? 1,
-      display: data.display ?? { ...DEFAULT_DISPLAY },
+      display: { ...DEFAULT_DISPLAY, ...data.display },
       activeRunwayIds: data.activeRunwayIds ?? [],
       runwaySource: data.runwaySource ?? 'default',
       trafficMode: data.trafficMode ?? 'sim',

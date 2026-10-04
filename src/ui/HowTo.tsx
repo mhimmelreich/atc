@@ -254,7 +254,7 @@ function Controls() {
         ['Landerichtung', 'ACTIVE RWY: AUTO wählt nach dem Wind oder bei LIVE nach den echten Landungen. Bahnen der Gegenrichtung schalten von Hand um (MANUELL), ein Klick auf MANUELL wieder auf AUTO.'],
         ['Funkstellen und Wetter', 'FREQ / WX: Approach und Turm mit Frequenz, Wind und QNH. Die Maus über WX zeigt das METAR.'],
         ['Zeitraffer', 'SESSION 1x bis 8x (bei LIVE nur 1x), Pause mit ⏸'],
-        ['Anzeige', 'Unten LABELS, ILS, NAVAID, STARs'],
+        ['Anzeige', 'Unten LABELS, ILS, NAVAID, STARs. NAVAID zeigt Funkfeuer und die Punkte der STARs aktiver Bahnen; NAV ALL zeigt zusätzlich die Punkte inaktiver Bahnen.'],
         ['Funk', 'RADIO zeigt das Funk-Log, VOICE schaltet die Stimmen. Ton gibt es erst nach dem ersten Klick ins Spiel.'],
       ]}
     />

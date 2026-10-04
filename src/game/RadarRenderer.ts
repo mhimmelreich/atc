@@ -63,6 +63,8 @@ export interface DisplayOptions {
   labels: boolean;
   ilsCones: boolean;
   waypoints: boolean;
+  /** Auch Punkte, die nur auf STARs inaktiver Bahnen liegen */
+  allNavaids: boolean;
   stars: boolean;
 }
 
@@ -70,6 +72,7 @@ export const DEFAULT_DISPLAY: DisplayOptions = {
   labels: true,
   ilsCones: true,
   waypoints: true,
+  allNavaids: false,
   stars: true,
 };
 
