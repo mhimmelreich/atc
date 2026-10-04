@@ -7,6 +7,7 @@ const MAX_QUEUE = 6;      // ein Kanal: bei Stau die ältesten Meldungen verwerf
 const STALE_MS = 25_000;  // so alte Meldungen nicht mehr abspielen
 const GAP_MS = 350;       // Pause zwischen zwei Sprechern
 const PREFETCH = 2;
+const SQUELCH_LEVEL = 0.07; // Spitze des Rauschschwanzes nach dem Loslassen der Sendetaste
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -117,7 +118,8 @@ export class RadioVoice {
 
   private playRadio(ctx: AudioContext, buffer: AudioBuffer, pilot: boolean): Promise<void> {
     const t0 = ctx.currentTime + 0.06;
-    const end = t0 + buffer.duration;
+    // Piper hängt Stille an; die Sendetaste geht kurz nach dem letzten Wort los
+    const end = t0 + speechEnd(buffer) + 0.08;
     const out = ctx.createGain();
     out.gain.value = 0.9;
     out.connect(ctx.destination);
@@ -136,22 +138,27 @@ export class RadioVoice {
       .connect(level)
       .connect(out);
 
-    // Rauschen während der Sendung, kurzer Rauschstoß beim Loslassen der Sendetaste
+    // Rauschen während der Sendung; beim Loslassen der Sendetaste ein kurzer, weicher Rauschschwanz (Squelch)
     const noise = ctx.createBufferSource();
     noise.buffer = this.noiseBuffer(ctx);
     noise.loop = true;
     const hiss = ctx.createGain();
-    const n = pilot ? 0.05 : 0.025;
+    const n = pilot ? 0.04 : 0.02;
+    const tail = 0.12 + Math.random() * 0.06;
     hiss.gain.setValueAtTime(0, t0 - 0.05);
     hiss.gain.linearRampToValueAtTime(n, t0);
     hiss.gain.setValueAtTime(n, end);
-    hiss.gain.linearRampToValueAtTime(n * 5, end + 0.02);
-    hiss.gain.linearRampToValueAtTime(0, end + 0.13);
-    noise.connect(biquad(ctx, 'bandpass', 1800, 0.5)).connect(hiss).connect(out);
+    hiss.gain.linearRampToValueAtTime(SQUELCH_LEVEL, end + 0.015);
+    hiss.gain.setTargetAtTime(0, end + 0.03, tail / 4);
+    noise
+      .connect(biquad(ctx, 'highpass', 500, 0.7))
+      .connect(biquad(ctx, 'lowpass', 2400, 0.7))
+      .connect(hiss)
+      .connect(out);
 
     noise.start(t0 - 0.05);
     voice.start(t0);
-    noise.stop(end + 0.15);
+    noise.stop(end + 0.03 + tail);
     return new Promise((resolve) => {
       noise.onended = () => {
         this.stopCurrent = null;
@@ -187,4 +194,12 @@ export class RadioVoice {
       speechSynthesis.speak(u);
     });
   }
+}
+
+/** Ende der Sprache im Puffer (letzte Stelle über der Rauschgrenze) */
+function speechEnd(buffer: AudioBuffer): number {
+  const data = buffer.getChannelData(0);
+  let i = data.length - 1;
+  while (i > 0 && Math.abs(data[i]) < 0.01) i--;
+  return Math.min(buffer.duration, i / buffer.sampleRate);
 }
