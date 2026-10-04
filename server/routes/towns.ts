@@ -32,7 +32,8 @@ interface OsmMember {
   geometry?: Array<{ lat: number; lon: number } | null>;
 }
 
-const pending = new Map<string, Promise<Town[]>>();
+const pending = new Map<string, Promise<string>>();
+const WAIT_MS = 20_000;
 
 /** Wege der Außengrenze zu geschlossenen Ringen zusammensetzen */
 function stitch(ways: Array<Array<[number, number]>>): Array<Array<[number, number]>> {
@@ -120,43 +121,42 @@ function ringsOf(rel: OsmElement): Town['rings'] {
     .filter((r) => r.length >= 4);
 }
 
-/**
- * Ortschaften mit Einwohnerzahl (die steht zuverlässig am Ortsknoten, place=city/town/village) und als Umriss
- * die kleinste Gemeindegrenze, in der der Knoten liegt: Gemeinde (admin_level 8), bei kreisfreien Städten die
- * Stadt auf Ebene 6 (nicht der Landkreis). Ohne passende Grenze bleibt es beim Namen.
- */
-async function fetchTowns(lat: number, lon: number): Promise<Town[]> {
-  const q1 = `[out:json][timeout:110];node(around:${RADIUS_M},${lat},${lon})[place~"^(city|town|village)$"][name][population](if:number(t["population"])>=${TOWN_MIN_POP})->.p;`
-    + `foreach.p->.n(.n out tags;.n is_in->.a;rel(pivot.a)[boundary=administrative][admin_level~"^(6|8)$"];out tags qt;);`;
-  const els = await overpass(q1);
-  const towns: Array<Omit<Town, 'rings'> & { relId?: number }> = [];
-  let cur: (typeof towns)[number] | null = null;
-  let level6: number | undefined;
-  for (const e of els) {
-    if (e.type === 'node') {
-      if (cur && cur.relId === undefined) cur.relId = level6;
-      cur = { name: e.tags!.name, pop: popOf(e.tags), lat: e.lat!, lng: e.lon! };
-      level6 = undefined;
-      towns.push(cur);
-    } else if (e.type === 'relation' && cur) {
-      const t = e.tags ?? {};
-      if (t.admin_level === '8' && cur.relId === undefined) cur.relId = e.id;
-      // Ebene 6 nur für die Stadt selbst, nicht für den Landkreis drumherum
-      else if (t.admin_level === '6' && t['de:place'] !== 'county' && !/kreis/i.test(t.name ?? '') && (t.name === cur.name || t['de:place'] === 'city')) level6 = e.id;
+/** Liegt der Punkt in einem der Ringe? (Strahlverfahren) */
+function inside(lat: number, lng: number, rings: Town['rings']): boolean {
+  let hit = false;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [yi, xi] = ring[i], [yj, xj] = ring[j];
+      if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) hit = !hit;
     }
   }
-  if (cur && cur.relId === undefined) cur.relId = level6;
+  return hit;
+}
 
-  const ids = [...new Set(towns.map((t) => t.relId).filter((id): id is number => id !== undefined))];
-  const geoms = new Map<number, Town['rings']>();
-  for (let i = 0; i < ids.length; i += 200) {
-    const rels = await overpass(`[out:json][timeout:110];rel(id:${ids.slice(i, i + 200).join(',')});out geom qt;`);
-    for (const r of rels) geoms.set(r.id, ringsOf(r));
+const escapeRe = (s: string) => s.replace(/[\\^$.*+?()[\]{}|"]/g, (c) => (c === '"' ? '\\"' : `\\\\${c}`));
+
+/**
+ * Ortschaften mit Einwohnerzahl (die steht zuverlässig am Ortsknoten, place=city/town/village) und als Umriss
+ * die gleichnamige Gemeindegrenze, in der der Knoten liegt: Gemeinde (admin_level 8), bei kreisfreien Städten
+ * die Stadt auf Ebene 6. Ohne passende Grenze bleibt es beim Namen.
+ */
+async function fetchTowns(lat: number, lon: number): Promise<Town[]> {
+  const nodes = await overpass(`[out:json][timeout:110];node(around:${RADIUS_M},${lat},${lon})[place~"^(city|town|village)$"][name][population](if:number(t["population"])>=${TOWN_MIN_POP});out tags qt;`);
+  const towns = nodes.map((n) => ({ name: n.tags!.name, pop: popOf(n.tags), lat: n.lat!, lng: n.lon! })).filter((t) => t.pop >= TOWN_MIN_POP);
+  const names = [...new Set(towns.map((t) => t.name))];
+  const rels: OsmElement[] = [];
+  for (let i = 0; i < names.length; i += 150) {
+    const re = names.slice(i, i + 150).map(escapeRe).join('|');
+    rels.push(...await overpass(`[out:json][timeout:110];rel(around:${RADIUS_M + 30_000},${lat},${lon})[boundary=administrative][admin_level~"^(6|8)$"][name~"^(${re})$"];out geom qt;`));
   }
-  return towns.map(({ relId, ...t }) => ({
-    ...t, lat: Math.round(t.lat * 1e4) / 1e4, lng: Math.round(t.lng * 1e4) / 1e4,
-    rings: relId !== undefined ? geoms.get(relId) ?? [] : [],
-  }));
+  const bounds = rels
+    .filter((r) => r.tags?.admin_level === '8' || (r.tags?.['de:place'] !== 'county' && !/kreis/i.test(r.tags?.name ?? '')))
+    .map((r) => ({ name: r.tags!.name, level: r.tags!.admin_level, rings: ringsOf(r) }))
+    .filter((b) => b.rings.length > 0);
+  return towns.map((t) => {
+    const own = bounds.filter((b) => b.name === t.name && inside(t.lat, t.lng, b.rings)).sort((a, b) => Number(b.level) - Number(a.level))[0];
+    return { ...t, lat: Math.round(t.lat * 1e4) / 1e4, lng: Math.round(t.lng * 1e4) / 1e4, rings: own?.rings ?? [] };
+  });
 }
 
 router.get('/', async (req, res) => {
@@ -175,24 +175,30 @@ router.get('/', async (req, res) => {
     res.type('json').send(readFileSync(file, 'utf8'));
     return;
   }
-  try {
-    let job = pending.get(key);
-    if (!job) {
-      job = fetchTowns(gLat, gLon).finally(() => pending.delete(key));
-      pending.set(key, job);
-    }
-    const towns = await job;
-    const body = JSON.stringify({ source: 'OpenStreetMap', license: 'ODbL 1.0', towns });
-    mkdirSync(DATA_DIR, { recursive: true });
-    writeFileSync(file, body);
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    res.type('json').send(body);
-  } catch (err) {
-    console.error('towns:', (err as Error).message);
-    // Lieber veraltet als gar nicht
-    if (existsSync(file)) { res.type('json').send(readFileSync(file, 'utf8')); return; }
-    res.status(503).json({ error: 'Ortschaften nicht verfügbar' });
+  // Die erste Abfrage dauert oft länger als ein Proxy wartet: dann 202, der Client fragt wieder
+  let job = pending.get(key);
+  if (!job) {
+    job = fetchTowns(gLat, gLon)
+      .then((towns) => {
+        const body = JSON.stringify({ source: 'OpenStreetMap', license: 'ODbL 1.0', towns });
+        mkdirSync(DATA_DIR, { recursive: true });
+        writeFileSync(file, body);
+        return body;
+      })
+      .finally(() => pending.delete(key));
+    job.catch((err: Error) => console.error('towns:', err.message));
+    pending.set(key, job);
   }
+  const done = await Promise.race([job.then((body) => body, () => null), new Promise<undefined>((ok) => setTimeout(ok, WAIT_MS))]);
+  if (done === undefined) { res.status(202).json({ pending: true }); return; }
+  if (done !== null) {
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.type('json').send(done);
+    return;
+  }
+  // Lieber veraltet als gar nicht
+  if (existsSync(file)) { res.type('json').send(readFileSync(file, 'utf8')); return; }
+  res.status(503).json({ error: 'Ortschaften nicht verfügbar' });
 });
 
 export default router;

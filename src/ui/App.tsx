@@ -278,7 +278,7 @@ export function App() {
     let stopped = false;
     const [lat, lng] = townCenter.split(',').map(Number);
     setTownStatus('Orte werden geladen…');
-    fetchTowns(lat, lng)
+    fetchTowns(lat, lng, () => stopped)
       .then((list) => { if (!stopped) { setTowns(list); setTownStatus(null); } })
       .catch(() => { if (!stopped) setTownStatus('Orte nicht verfügbar'); });
     return () => { stopped = true; };
