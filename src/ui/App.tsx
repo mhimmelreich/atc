@@ -21,6 +21,7 @@ import { RadioVoice } from '@/services/RadioVoice';
 import { loadTelephony } from '@/game/Telephony';
 import { fetchLiveTraffic, fetchTrace, LIVE_POLL_MS } from '@/services/LiveTrafficService';
 import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
+import { fetchTowns, type Town } from '@/services/TownService';
 import type { TrafficMode } from '@/types/live';
 
 const SIDEBAR_W = 288;
@@ -36,6 +37,12 @@ const SOURCE_NAMES: Record<AirportSource, string> = {
   navdata: 'Navigraph', open: 'OurAirports', generic: 'generisch',
 };
 const RADIO_STORAGE = 'atc-radio';
+// WATCH: Ortschaften ab dieser Einwohnerzahl einblenden (0 = aus)
+const TOWNS_STORAGE = 'atc-towns-min';
+const TOWN_OPTIONS: Array<{ pop: number; label: string }> = [
+  { pop: 0, label: 'AUS' }, { pop: 5000, label: '5k' }, { pop: 10000, label: '10k' },
+  { pop: 20000, label: '20k' }, { pop: 50000, label: '50k' }, { pop: 100000, label: '100k' },
+];
 const RUNWAY_SOURCES: Record<RunwaySource, { label: string; title: string }> = {
   default: { label: 'AUTO', title: 'Automatisch: nach dem Wind (METAR) und bei LIVE nach den echten Landungen' },
   wind:    { label: 'AUTO · WIND', title: 'Automatisch nach dem Wind (METAR)' },
@@ -252,6 +259,34 @@ export function App() {
     return () => { stopped = true; clearInterval(id); };
   }, [gameState.trafficMode, airport, spectator]);
 
+  // ── WATCH: Ortschaften rund um den Zuschauer, gefiltert nach Einwohnern ──
+  const [townMin, setTownMin] = useState<number>(() => {
+    try { const v = Number(localStorage.getItem(TOWNS_STORAGE) ?? '20000'); return TOWN_OPTIONS.some((o) => o.pop === v) ? v : 20000; } catch { return 20000; }
+  });
+  const changeTownMin = (pop: number) => {
+    setTownMin(pop);
+    try { localStorage.setItem(TOWNS_STORAGE, String(pop)); } catch { /* nur Komfort */ }
+  };
+  const [towns, setTowns] = useState<Town[]>([]);
+  const [townStatus, setTownStatus] = useState<string | null>(null);
+  // Neu laden erst bei deutlich anderem Standort (Server rastert auf 0,5°)
+  const townCenter = watching && townMin > 0 && (spectator ?? airport)
+    ? `${(Math.round((spectator ?? airport)!.lat * 4) / 4).toFixed(2)},${(Math.round((spectator ?? airport)!.lng * 4) / 4).toFixed(2)}`
+    : null;
+  useEffect(() => {
+    if (!townCenter) return;
+    let stopped = false;
+    const [lat, lng] = townCenter.split(',').map(Number);
+    setTownStatus('Orte werden geladen…');
+    fetchTowns(lat, lng)
+      .then((list) => { if (!stopped) { setTowns(list); setTownStatus(null); } })
+      .catch(() => { if (!stopped) setTownStatus('Orte nicht verfügbar'); });
+    return () => { stopped = true; };
+  }, [townCenter]);
+  useEffect(() => {
+    engineRef.current?.setTowns(watching && townMin > 0 ? towns.filter((t) => t.pop >= townMin) : []);
+  }, [towns, townMin, watching]);
+
   // ── WATCH: vergangene Flugbahn des gewählten Fliegers, jede Minute nachgeladen ──
   const traceHex = watching && gameState.selectedId?.startsWith('live-') ? gameState.selectedId.slice(5) : null;
   const [traceStatus, setTraceStatus] = useState<string | null>(null);
@@ -452,6 +487,27 @@ export function App() {
         </div>
       )}
 
+      {/* WATCH: Ortschaften ab Einwohnerzahl */}
+      {watching && (
+        <div>
+          <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
+            <span>ORTE AB EINWOHNERN</span>
+            {townStatus && <span style={{ color: '#ffaa00' }}>{townStatus}</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 3 }}>
+            {TOWN_OPTIONS.map((o) => (
+              <button key={o.pop} onClick={() => changeTownMin(o.pop)} title={o.pop ? `Orte ab ${o.pop.toLocaleString('de-DE')} Einwohnern` : 'Keine Orte'} style={{
+                flex: 1,
+                background: townMin === o.pop ? '#0a3020' : 'transparent',
+                border: `1px solid ${townMin === o.pop ? '#00cc66' : '#1a4428'}`,
+                color: townMin === o.pop ? '#00ff88' : '#446644',
+                fontFamily: '"Courier New", monospace', fontSize: 11, padding: '4px 2px', cursor: 'pointer', borderRadius: 2,
+              }}>{o.label}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Active landing runway */}
       {airport && (() => {
         const ilsRunways = airport.runways.filter((r) => r.ils && r.role !== 'departure');
@@ -546,10 +602,11 @@ export function App() {
       <div>
         <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
           <span>TRAIL</span>
-          <span style={{ color: '#00ff88' }}>{gameState.trailLength}</span>
+          {/* Ein Spurpunkt alle 5 s */}
+          <span style={{ color: '#00ff88' }}>{gameState.trailLength === 0 ? 'AUS' : `${Math.floor(gameState.trailLength * 5 / 60)}:${String(gameState.trailLength * 5 % 60).padStart(2, '0')} min`}</span>
         </div>
         <input
-          type="range" min={0} max={20} step={1}
+          type="range" min={0} max={120} step={1}
           value={gameState.trailLength}
           onChange={(e) => engineRef.current?.setTrailLength(Number(e.target.value))}
           style={{ width: '100%', accentColor: '#00cc66', cursor: 'pointer' }}

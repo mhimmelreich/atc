@@ -10,3 +10,6 @@ lnm_*.exe
 
 # OurAirports-CSVs werden vom Server selbst geladen
 data/opendata/
+
+# Ortschaften aus OpenStreetMap, vom Server geladen
+data/towns/

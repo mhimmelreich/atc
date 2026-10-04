@@ -83,8 +83,12 @@ export function guessStar(track: Pt[], heading: number | null, stars: STAR[], ac
     if (dev < ENTRY_MAX_DEV_DEG && (!entry || dev < entry.dev)) entry = { star, wp, dev };
   }
   if (!entry) return null;
-  const same = stars.filter((s) => procName(s) === procName(entry!.star) && s.waypoints[0]?.id === entry!.wp.id);
-  return { name: procName(entry.star), runways: runwaysOf(same), status: 'entry', next: entry.wp.name, passed: 0 };
+  // Vom selben Eintrittspunkt gibt es oft STARs für beide Betriebsrichtungen: die der aktiven Bahn bevorzugen
+  const fromEntry = stars.filter((s) => s.waypoints[0]?.id === entry!.wp.id);
+  const active = fromEntry.filter((s) => activeRunwayIds.includes(s.runway));
+  const name = procName((active[0] ?? entry.star));
+  const same = (active.length ? active : fromEntry).filter((s) => procName(s) === name);
+  return { name, runways: runwaysOf(same), status: 'entry', next: entry.wp.name, passed: 0 };
 }
 
 /** Prozedurname ohne Bahn, z. B. "KERAX 6A" */

@@ -100,6 +100,8 @@ export interface RenderOptions {
   live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]>; inbound: Map<string, LiveInbound> };
   /** WATCH: vergangene Flugbahn des gewählten Fliegers */
   track?: { hex: string; points: Array<{ lat: number; lng: number; altFt: number | null; ts?: number }> } | null;
+  /** WATCH: Ortschaften mit Umriss und Namen */
+  towns?: import('@/services/TownService').Town[];
   /** WATCH: Standort des Zuschauers (GPS) */
   spectator?: { lat: number; lng: number } | null;
 }
@@ -209,6 +211,7 @@ export class RadarRenderer {
       if (previewAc) this.drawAltitudeReachCircle(previewAc, opts.previewAltitude.targetAlt, ll2c);
     }
 
+    if (opts.towns?.length) drawTowns(ctx, opts.towns, ll2c, W, H);
     if (opts.spectator) drawSpectator(ctx, ll2c(opts.spectator.lat, opts.spectator.lng));
     if (opts.track && opts.live) {
       // Bisherige Flugbahn bis zur aktuellen Position
@@ -245,7 +248,7 @@ export class RadarRenderer {
     // Quellenhinweis für die Live-Daten (ODbL)
     if (opts.live) {
       ctx.fillStyle = 'rgba(150,170,160,0.6)';
-      ctx.fillText('Traffic: adsb.lol (ODbL)', 8, H - 8);
+      ctx.fillText(`Traffic: adsb.lol (ODbL)${opts.towns?.length ? ' · Orte: © OpenStreetMap' : ''}`, 8, H - 8);
     }
 
     ctx.restore();
@@ -993,5 +996,44 @@ export function drawSpectator(ctx: CanvasRenderingContext2D, p: { x: number; y: 
   ctx.font = 'bold 10px "Courier New"';
   ctx.textAlign = 'left';
   ctx.fillText('YOU', p.x + 9, p.y + 14);
+  ctx.restore();
+}
+
+const TOWN_LINE = 'rgba(150,130,210,0.35)';
+const TOWN_LABEL = 'rgba(175,160,225,0.75)';
+
+/** Ortschaften: Umriss gestrichelt, Name am Ortskern, größere Orte größer beschriftet */
+export function drawTowns(
+  ctx: CanvasRenderingContext2D,
+  towns: import('@/services/TownService').Town[],
+  ll2c: (lat: number, lng: number) => { x: number; y: number } | null,
+  W: number, H: number,
+): void {
+  ctx.save();
+  ctx.strokeStyle = TOWN_LINE;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  for (const t of towns) {
+    for (const ring of t.rings) {
+      let pen = false;
+      for (const [lat, lng] of ring) {
+        const p = ll2c(lat, lng);
+        if (!p) { pen = false; continue; }
+        if (pen) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+        pen = true;
+      }
+    }
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = TOWN_LABEL;
+  ctx.textAlign = 'center';
+  for (const t of towns) {
+    const p = ll2c(t.lat, t.lng);
+    if (!p || p.x < -50 || p.x > W + 50 || p.y < -20 || p.y > H + 20) continue;
+    ctx.font = `${t.pop >= 100_000 ? 'bold 11px' : t.pop >= 20_000 ? '10px' : '9px'} "Courier New"`;
+    ctx.fillText(t.name.toUpperCase(), p.x, p.y + 3);
+  }
   ctx.restore();
 }

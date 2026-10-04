@@ -49,6 +49,8 @@ services:
       - ./data/navdata:/app/data/navdata:ro
       # OurAirports-CSVs (frei, vom Server geladen und gecacht)
       - ./data/opendata:/app/data/opendata
+      # Ortschaften aus OpenStreetMap (Overpass, gecacht)
+      - ./data/towns:/app/data/towns
     networks:
       - proxy
     depends_on:

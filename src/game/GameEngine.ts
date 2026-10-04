@@ -11,14 +11,15 @@ import { RadarRenderer, DEFAULT_DISPLAY, type DisplayOptions, type RenderOptions
 import { Scene3DRenderer, DEFAULT_CAMERA, PITCH_MIN, PITCH_MAX, type Camera3D } from './Scene3DRenderer';
 import { headingDiff } from '@/utils/aviation';
 import { guessStar, type StarGuess } from './StarMatch';
+import type { Town } from '@/services/TownService';
 import { pad3 } from './Speech';
 import { destinationPoint, distanceNM } from '@/utils/geo';
 import { SCORE_LANDING, SCORE_GOAROUND, SCORE_SEPARATION_VIOLATION, SCORE_COLLISION } from './constants';
 
 const RADIO_LOG_SIZE = 50;
-const LIVE_TRAIL_MAX = 20;
+const LIVE_TRAIL_MAX = 120;
 // WATCH: längere Spur (etwa 12 Minuten), damit sich die STAR erkennen lässt
-const WATCH_TRAIL_MAX = 150;
+const WATCH_TRAIL_MAX = 180;
 // WATCH: für den STAR-Vergleich nur der Teil der Flugbahn in Platznähe
 const STAR_MATCH_NM = 120;
 const LIVE_EXTRAPOLATE_MAX_S = 30;
@@ -148,7 +149,8 @@ export class GameEngine {
   private liveFrame: LiveAircraft[] = [];            // echte Flieger im letzten Bild (für Klicks)
   private liveFinals = new Map<string, { heading: number; at: number }>(); // hex → Bahnkurs, zuletzt im Endanflug gesehen
   private track: RenderOptions['track'] = null;                            // WATCH: Flugbahn des gewählten Fliegers
-  private starGuesses = new Map<string, StarGuess>();                       // WATCH: hex → wahrscheinliche STAR
+  private starGuesses = new Map<string, StarGuess>();
+  private towns: Town[] = [];                                               // WATCH: Ortschaften (schon nach Einwohnern gefiltert)                       // WATCH: hex → wahrscheinliche STAR
   private liveDepartures = new Map<string, number>();                       // WATCH: hex → zuletzt beim Start gesehen
   private liveOutbound = new Map<string, string | undefined>();              // WATCH: hex → Zielplatz der Abflüge
 
@@ -424,6 +426,7 @@ export class GameEngine {
           activeRunwayIds: this.state.activeRunwayIds,
           live: this.liveMode ? { aircraft: live, trails: this.liveTrails, inbound: roles } : undefined,
           spectator: this.watching ? this.state.spectator : null,
+          towns: this.watching ? this.towns : undefined,
           track: this.watching && this.track && selectedId === liveId(this.track.hex) ? this.track : null,
         };
         if (this.view3D && this.scene3d) this.scene3d.render(opts, this.camera);
@@ -513,6 +516,9 @@ export class GameEngine {
       if (guess) this.starGuesses.set(ac.hex, guess);
     }
   }
+
+  /** WATCH: Ortschaften fürs Radarbild */
+  setTowns(towns: Town[]): void { this.towns = towns; }
 
   /** Blick auf einen Punkt richten (z. B. Suchtreffer) */
   centerOn(lat: number, lng: number): void { this.viewLat = lat; this.viewLng = lng; }

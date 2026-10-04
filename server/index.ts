@@ -5,6 +5,7 @@ import airportRouter from './routes/airport.js';
 import trafficRouter from './routes/traffic.js';
 import navdataRouter from './routes/navdata.js';
 import opendataRouter from './routes/opendata.js';
+import townsRouter from './routes/towns.js';
 import ttsRouter from './routes/tts.js';
 import metarRouter from './routes/metar.js';
 
@@ -44,6 +45,7 @@ app.use('/api/airport', airportRouter);
 app.use('/api/navdata', navdataRouter);
 app.use('/api/opendata', opendataRouter);
 app.use('/api/metar', metarRouter);
+app.use('/api/towns', townsRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 

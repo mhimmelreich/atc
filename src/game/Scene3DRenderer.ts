@@ -2,7 +2,7 @@
 import type { Aircraft } from '@/types/aircraft';
 import type { Runway } from '@/types/airport';
 import type { STAR, Waypoint } from '@/types/navdata';
-import { drawSpectator, type RenderOptions } from './RadarRenderer';
+import { drawSpectator, drawTowns, type RenderOptions } from './RadarRenderer';
 import { destinationPoint, toRad } from '@/utils/geo';
 import { typeData } from './constants';
 import { aircraftSilhouette } from './aircraftSymbol';
@@ -12,8 +12,8 @@ export const ALT_EXAGGERATION = 4;
 const FT_PER_NM = 6076;
 const FOV_DEG = 50;
 const GLIDE_NM = 15;
-const TRAIL_SAMPLE_MS = 4000;
-const TRAIL_MAX = 24;
+const TRAIL_SAMPLE_MS = 5000;
+const TRAIL_MAX = 120;
 const LIVE_LABEL_MAX_FT = 20000;
 
 /** Kamera: Blickrichtung (Grad, 0 = nach Norden), Neigung über dem Boden (Grad) */
@@ -191,6 +191,7 @@ export class Scene3DRenderer {
 
     this.sampleTrails(o);
     this.drawConflicts(o);
+    if (o.towns?.length) drawTowns(this.ctx, o.towns, (lat, lng) => this.proj(this.world(lat, lng, 0)), this.cssW, this.cssH);
     if (o.track && o.live) {
       // Bisherige Flugbahn in ihrer Höhe, mit Loten alle paar Punkte
       const now = o.live.aircraft.find((a) => a.hex === o.track!.hex);
@@ -407,7 +408,7 @@ export class Scene3DRenderer {
   private drawTargets(o: RenderOptions): void {
     type Item = { depth: number; draw: () => void };
     const items: Item[] = [];
-    const trailN = Math.max(4, o.trailLength * 2);
+    const trailN = Math.max(4, o.trailLength);
     for (const ac of o.aircraft) {
       const v = this.world(ac.lat, ac.lng, ac.altitudeFt);
       const c = this.camSpace(v);
@@ -543,7 +544,7 @@ export class Scene3DRenderer {
     ctx.fillText(`3D  ${o.rangeNM.toFixed(0)} NM  HDG ${hdg}  TILT ${Math.round(cam.pitch)}°  ALT ×${ALT_EXAGGERATION}`, 8, 18);
     if (o.live) {
       ctx.fillStyle = 'rgba(150,170,160,0.6)';
-      ctx.fillText('Traffic: adsb.lol (ODbL)', 8, this.cssH - 8);
+      ctx.fillText(`Traffic: adsb.lol (ODbL)${o.towns?.length ? ' · Orte: © OpenStreetMap' : ''}`, 8, this.cssH - 8);
     }
     // Kompassrose oben rechts: Pfeil zeigt nach Norden
     const cx = this.cssW - 28, cy = 28;

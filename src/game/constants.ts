@@ -6,7 +6,7 @@ export const WARN_VERTICAL_FT = 2000;
 
 export const RADAR_RANGE_NM = 80;
 export const SWEEP_PERIOD_MS = 4000;
-export const TRAIL_LENGTH = 8;
+export const TRAIL_LENGTH = 120;
 export const TRAIL_INTERVAL_MS = 5000;
 
 export const ILS_CONE_HALF_DEG = 3;
