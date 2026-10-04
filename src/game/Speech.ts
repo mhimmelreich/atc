@@ -63,6 +63,28 @@ export function frequencyPhrase(mhz: number): { text: string; spoken: string } {
   return { text, spoken: `${spellDigits(whole)} decimal ${spellDigits(decimals)}` };
 }
 
-/** Rufnamen für die englische Stimme: Kürzel wie "HCF" Buchstabe für Buchstabe */
+/**
+ * Deutsche Ortsnamen, die die englischen Stimmen sonst englisch aussprechen ("Frank-furt");
+ * Piper liest Lautschrift in [[ ]] direkt. Schlüssel ohne Umlaute (nach plain)
+ */
+const PLACE_PHONEMES: Record<string, string> = {
+  frankfurt: 'fɹˈaŋkfʊɹt',
+  hamburg: 'hˈambʊɹk',
+  stuttgart: 'ʃtˈʊtɡaɹt',
+  nurnberg: 'nˈʊɹnbɛɹk',
+  nuernberg: 'nˈʊɹnbɛɹk',
+  munchen: 'mˈʊnçən',
+  muenchen: 'mˈʊnçən',
+  koln: 'kˈœln',
+  dusseldorf: 'dˈʊsəldɔɹf',
+  duesseldorf: 'dˈʊsəldɔɹf',
+};
+
+/** Rufnamen für die englische Stimme: Kürzel wie "HCF" Buchstabe für Buchstabe, deutsche Orte in Lautschrift */
 export const spokenName = (name: string): string =>
-  plain(name).replace(/\b[A-Z]{2,3}\b/g, (abbr) => abbr.split('').join(' '));
+  plain(name)
+    .replace(/\b[A-Z]{2,3}\b/g, (abbr) => abbr.split('').join(' '))
+    .replace(/\p{L}+/gu, (word) => {
+      const ipa = PLACE_PHONEMES[word.toLowerCase()];
+      return ipa ? `[[ ${ipa} ]]` : word;
+    });

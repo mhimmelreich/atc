@@ -13,11 +13,12 @@ const cache = new Map<string, Buffer>();
 // Eigene Grenze: pro Funkspruch eine Anfrage, deutlich mehr als bei den übrigen Routen
 router.use(rateLimit({ windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false }));
 
+// [[ … ]]: Lautschrift für Ortsnamen (spokenName)
 router.get('/', async (req, res) => {
   const voice = String(req.query.voice ?? 'atc');
   const speaker = Math.max(0, Math.min(999, parseInt(String(req.query.speaker ?? '0'), 10) || 0));
   const text = String(req.query.text ?? '').trim();
-  if (!VOICES.includes(voice) || !text || text.length > MAX_TEXT || !/^[\p{L}\p{N}\s,.'-]+$/u.test(text)) {
+  if (!VOICES.includes(voice) || !text || text.length > MAX_TEXT || !/^[\p{L}\p{N}\s,.'[\]-]+$/u.test(text)) {
     res.status(400).json({ error: 'Ungültige Anfrage' });
     return;
   }
