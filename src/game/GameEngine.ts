@@ -9,7 +9,7 @@ import type { Weather } from '@/types/weather';
 import { AircraftManager } from './AircraftManager';
 import { inbound, callsIn, liveToAircraft, liveId, hexOf, landingRunway, type Inbound, type TakeoverContext } from './LiveTraffic';
 import { RadarRenderer, DEFAULT_DISPLAY, type DisplayOptions, type RenderOptions } from './RadarRenderer';
-import { Scene3DRenderer, DEFAULT_CAMERA, PITCH_MIN, PITCH_MAX, type Camera3D } from './Scene3DRenderer';
+import { Scene3DRenderer, DEFAULT_CAMERA, ALT_SCALES, DEFAULT_ALT_SCALE, PITCH_MIN, PITCH_MAX, type Camera3D } from './Scene3DRenderer';
 import { headingDiff } from '@/utils/aviation';
 import { guessStar, type StarGuess } from './StarMatch';
 import type { Town } from '@/services/TownService';
@@ -206,6 +206,10 @@ export class GameEngine {
   attachCanvas(canvas: HTMLCanvasElement): void {
     this.renderer = new RadarRenderer(canvas);
     this.scene3d = new Scene3DRenderer(canvas);
+    try {
+      const v = Number(localStorage.getItem(GameEngine.ALT_SCALE_KEY));
+      if ((ALT_SCALES as readonly number[]).includes(v)) this.scene3d.altScale = v;
+    } catch { /* nur Komfort */ }
   }
 
   resizeCanvas(w: number, h: number): void {
@@ -523,6 +527,17 @@ export class GameEngine {
   }
 
   setView3D(on: boolean): void { this.view3D = on; }
+
+  /** 3D: Überhöhung der Höhen umschalten (×4, ×2, ×1 = maßstabsgetreu), im Browser gemerkt */
+  cycleAltScale(): number {
+    if (!this.scene3d) return DEFAULT_ALT_SCALE;
+    const i = ALT_SCALES.indexOf(this.scene3d.altScale as (typeof ALT_SCALES)[number]);
+    this.scene3d.altScale = ALT_SCALES[(i + 1) % ALT_SCALES.length];
+    try { localStorage.setItem(GameEngine.ALT_SCALE_KEY, String(this.scene3d.altScale)); } catch { /* nur Komfort */ }
+    return this.scene3d.altScale;
+  }
+  get altScale(): number { return this.scene3d?.altScale ?? DEFAULT_ALT_SCALE; }
+  private static readonly ALT_SCALE_KEY = 'atc-alt-scale';
 
   /** Kamera drehen (Grad nach rechts) und neigen (Grad nach oben) */
   orbit3D(dYaw: number, dPitch: number): void {

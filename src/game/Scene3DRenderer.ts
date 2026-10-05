@@ -7,8 +7,9 @@ import { destinationPoint, toRad } from '@/utils/geo';
 import { typeData } from './constants';
 import { aircraftSilhouette } from './aircraftSymbol';
 
-/** Höhen werden überhöht, sonst liegt bei 80 NM alles platt am Boden */
-export const ALT_EXAGGERATION = 4;
+/** Höhen werden standardmäßig überhöht, sonst liegt bei 80 NM alles platt am Boden; ×1 = maßstabsgetreu */
+export const ALT_SCALES = [4, 2, 1] as const;
+export const DEFAULT_ALT_SCALE = 4;
 const FT_PER_NM = 6076;
 const FOV_DEG = 50;
 const GLIDE_NM = 15;
@@ -61,6 +62,10 @@ export class Scene3DRenderer {
   private lat0 = 0;
   private lng0 = 0;
   private cosLat0 = 1;
+  /** Höhe des Platzes: der Boden der Szene liegt auf Platzhöhe, Höhen darüber also über Grund */
+  private elev0 = 0;
+  /** Überhöhung der Höhen (×1 maßstabsgetreu) */
+  altScale: number = DEFAULT_ALT_SCALE;
   private cam: Vec = { x: 0, y: 0, z: 0 };
   private right: Vec = { x: 1, y: 0, z: 0 };
   private up: Vec = { x: 0, y: 0, z: 1 };
@@ -94,7 +99,7 @@ export class Scene3DRenderer {
     return {
       x: (lng - this.lng0) * 60 * this.cosLat0,
       y: (lat - this.lat0) * 60,
-      z: (Math.max(0, altFt) / FT_PER_NM) * ALT_EXAGGERATION,
+      z: (Math.max(0, altFt - this.elev0) / FT_PER_NM) * this.altScale,
     };
   }
 
@@ -109,6 +114,7 @@ export class Scene3DRenderer {
     this.lat0 = ap.lat;
     this.lng0 = ap.lng;
     this.cosLat0 = Math.cos(toRad(ap.lat));
+    this.elev0 = ap.elevationFt ?? 0;
     const target = this.world(o.viewLat, o.viewLng, 0);
     const d = Scene3DRenderer.distanceFor(o.rangeNM);
     const yaw = toRad(cam.yaw);
@@ -186,7 +192,7 @@ export class Scene3DRenderer {
     this.drawRunways(o.airport.runways, o.display.labels);
     if (o.display.ilsCones) {
       for (const r of o.airport.runways) {
-        if (r.ils && r.role !== 'departure' && o.activeRunwayIds.includes(r.id)) this.drawGlidePath(r, o.airport.elevationFt);
+        if (r.ils && r.role !== 'departure' && o.activeRunwayIds.includes(r.id)) this.drawGlidePath(r);
       }
     }
     if (o.display.stars) this.drawStars(o.stars);
@@ -255,7 +261,7 @@ export class Scene3DRenderer {
   private drawLandmarks(o: RenderOptions): void {
     const { ctx } = this;
     const d = Scene3DRenderer.distanceFor(o.rangeNM);
-    // Gelände etwa auf Platzhöhe: Dach = Platzhöhe + Bauwerkshöhe, damit Flieger daneben richtig hoch oder tief wirken
+    // Gelände etwa auf Platzhöhe: Dach = Platzhöhe + Bauwerkshöhe (MSL), damit Flieger daneben richtig hoch oder tief wirken
     const elevFt = o.airport?.elevationFt ?? 0;
     const items = o.landmarks!
       .map((l) => ({ l, c: this.camSpace(this.world(l.lat, l.lng, 0)) }))
@@ -364,14 +370,14 @@ export class Scene3DRenderer {
   }
 
   /** Gleitpfad (3°) vom Aufsetzpunkt hinaus, darunter der verlängerte Anflugkurs am Boden */
-  private drawGlidePath(r: Runway, elevFt: number): void {
+  private drawGlidePath(r: Runway): void {
     const { ctx } = this;
     const thr = this.world(r.thresholdLat, r.thresholdLng);
     const end = this.world(r.endLat, r.endLng);
     const dir = norm({ x: thr.x - end.x, y: thr.y - end.y, z: 0 });
     const angle = toRad(r.ils?.glideslopeAngle ?? 3);
     const far = { x: thr.x + dir.x * GLIDE_NM, y: thr.y + dir.y * GLIDE_NM, z: 0 };
-    const top = { ...far, z: (((Math.tan(angle) * GLIDE_NM * FT_PER_NM) + elevFt) / FT_PER_NM) * ALT_EXAGGERATION };
+    const top = { ...far, z: Math.tan(angle) * GLIDE_NM * this.altScale };
     ctx.lineWidth = 1;
     ctx.strokeStyle = COL.GLIDE_GROUND;
     ctx.setLineDash([6, 6]);
@@ -636,7 +642,7 @@ export class Scene3DRenderer {
     ctx.font = '11px "Courier New"';
     ctx.textAlign = 'left';
     const hdg = Math.round(((cam.yaw % 360) + 360) % 360).toString().padStart(3, '0');
-    ctx.fillText(`3D  ${o.rangeNM.toFixed(0)} NM  HDG ${hdg}  TILT ${Math.round(cam.pitch)}°  ALT ×${ALT_EXAGGERATION}`, 8, 18);
+    ctx.fillText(`3D  ${o.rangeNM.toFixed(0)} NM  HDG ${hdg}  TILT ${Math.round(cam.pitch)}°  ALT ×${this.altScale}`, 8, 18);
     const credit = sourceCredit(o);
     if (credit) {
       ctx.fillStyle = 'rgba(150,170,160,0.6)';

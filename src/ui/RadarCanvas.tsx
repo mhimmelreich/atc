@@ -1,5 +1,5 @@
 // filepath: src/ui/RadarCanvas.tsx
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import type { GameEngine } from '@/game/GameEngine';
 import type { Aircraft } from '@/types/aircraft';
 
@@ -252,6 +252,7 @@ export function RadarCanvas({ engine, aircraft, selectedId, onSelectAircraft, on
 
 /** Knöpfe für Drehen, Neigen und Zoomen (vor allem für Touch ohne zweite Hand) */
 function ViewControls({ engine }: { engine: GameEngine }) {
+  const [altScale, setAltScale] = useState(() => engine.altScale);
   const btn = (label: string, title: string, act: () => void) => (
     <button
       key={label}
@@ -281,7 +282,16 @@ function ViewControls({ engine }: { engine: GameEngine }) {
       {btn('+', 'Heranzoomen', () => engine.adjustRange(0.95))}
       {btn('▼', 'Flacher', () => engine.orbit3D(0, -2))}
       {btn('−', 'Wegzoomen', () => engine.adjustRange(1.05))}
-      <div />
+      <button
+        title="Höhenüberhöhung: ×4, ×2 oder ×1 (maßstabsgetreu, Gebäude und Flieger in echten Proportionen)"
+        onClick={() => setAltScale(engine.cycleAltScale())}
+        style={{
+          width: 30, height: 30, background: altScale === 1 ? '#0a3020' : 'rgba(5,20,12,0.85)', border: `1px solid ${altScale === 1 ? '#00cc66' : '#1a4428'}`,
+          color: '#00cc66', fontFamily: '"Courier New", monospace', fontSize: 11, cursor: 'pointer', borderRadius: 2, padding: 0,
+        }}
+      >
+        ×{altScale}
+      </button>
       {btn('⌂', 'Ansicht zurücksetzen', () => { engine.resetCamera(); engine.resetView(); })}
       <div />
     </div>
