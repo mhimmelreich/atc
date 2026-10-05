@@ -165,7 +165,10 @@ export function App() {
     const saveId = setInterval(() => {
       engine.saveSession(selectedIcaoRef.current);
     }, 10_000);
-    return () => { engine.stop(); clearInterval(saveId); };
+    // Kamera beim Verlassen/Neuladen sofort sichern
+    const onHide = () => engine.saveCamera();
+    window.addEventListener('pagehide', onHide);
+    return () => { engine.stop(); clearInterval(saveId); window.removeEventListener('pagehide', onHide); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -198,6 +201,7 @@ export function App() {
         engine.restoreSession(pendingSessionRef.current);
         pendingSessionRef.current = null;
       }
+      engine.restoreCamera(ap.icao);
       setLoading(false);
     });
     return () => { cancelled = true; };

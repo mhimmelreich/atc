@@ -454,7 +454,7 @@ export class GameEngine {
   // LIVE läuft in Echtzeit, sonst laufen eigene und echte Flieger auseinander
   setTimeScale(s: number):    void { this.state = { ...this.state, timeScale: this.liveMode ? 1 : s }; this.trySave(); }
   setSweep(enabled: boolean): void { this.state = { ...this.state, sweepEnabled: enabled };                          this.trySave(); }
-  setRange(nm: number):       void { this.state = { ...this.state, rangeNM: Math.max(2, Math.min(200, nm)) };        this.trySave(); }
+  setRange(nm: number):       void { this.state = { ...this.state, rangeNM: Math.max(2, Math.min(200, nm)) };        this.trySave(); this.saveCameraSoon(); }
   setTrailLength(n: number):  void { this.state = { ...this.state, trailLength: n };                                 this.trySave(); }
 
   private trySave(): void {
@@ -470,6 +470,40 @@ export class GameEngine {
     const cosLat = Math.cos((this.viewLat * Math.PI) / 180);
     this.viewLat += dyNM / 60;
     this.viewLng -= dxNM / (60 * cosLat);
+    this.saveCameraSoon();
+  }
+
+  // ── Kamera (Ausschnitt, Zoom, 3D-Blickwinkel) übersteht ein Neuladen, je Platz ──
+  private static CAMERA_KEY = 'atc-camera-v1';
+  private cameraTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private saveCameraSoon(): void {
+    if (this.cameraTimer) return;
+    this.cameraTimer = setTimeout(() => { this.cameraTimer = null; this.saveCamera(); }, 500);
+  }
+
+  /** Sofort speichern (auch beim Verlassen der Seite) */
+  saveCamera(): void {
+    if (!this.currentIcao) return;
+    try {
+      localStorage.setItem(GameEngine.CAMERA_KEY, JSON.stringify({
+        icao: this.currentIcao, viewLat: this.viewLat, viewLng: this.viewLng,
+        rangeNM: this.state.rangeNM, yaw: this.camera.yaw, pitch: this.camera.pitch,
+      }));
+    } catch { /* nur Komfort */ }
+  }
+
+  /** Gespeicherte Kamera übernehmen, wenn sie zum Platz gehört */
+  restoreCamera(icao: string): void {
+    try {
+      const c = JSON.parse(localStorage.getItem(GameEngine.CAMERA_KEY) ?? 'null') as
+        { icao: string; viewLat: number; viewLng: number; rangeNM: number; yaw: number; pitch: number } | null;
+      if (!c || c.icao !== icao || ![c.viewLat, c.viewLng, c.rangeNM, c.yaw, c.pitch].every(Number.isFinite)) return;
+      this.viewLat = c.viewLat;
+      this.viewLng = c.viewLng;
+      this.state = { ...this.state, rangeNM: Math.max(2, Math.min(200, c.rangeNM)) };
+      this.camera = { yaw: c.yaw, pitch: Math.max(PITCH_MIN, Math.min(PITCH_MAX, c.pitch)) };
+    } catch { /* kaputter Eintrag: Standard */ }
   }
 
   setView3D(on: boolean): void { this.view3D = on; }
@@ -479,6 +513,7 @@ export class GameEngine {
     const yaw = (((this.camera.yaw + dYaw) % 360) + 360) % 360;
     const pitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, this.camera.pitch + dPitch));
     this.camera = { yaw, pitch };
+    this.saveCameraSoon();
   }
 
   /** Blickpunkt in der 3D-Ansicht verschieben: Bildschirmpixel, relativ zur Blickrichtung */
@@ -500,7 +535,7 @@ export class GameEngine {
     return this.scene3d?.project(lat, lng, altFt) ?? null;
   }
 
-  resetCamera(): void { this.camera = { ...DEFAULT_CAMERA }; }
+  resetCamera(): void { this.camera = { ...DEFAULT_CAMERA }; this.saveCameraSoon(); }
 
   /** WATCH: Standort des Zuschauers (GPS) setzen oder löschen (dann gilt der gewählte Platz) */
   /** WATCH: vergangene Flugbahn des gewählten Fliegers (null: keine) */
@@ -528,7 +563,7 @@ export class GameEngine {
   setTowns(towns: Town[]): void { this.towns = towns; }
 
   /** Blick auf einen Punkt richten (z. B. Suchtreffer) */
-  centerOn(lat: number, lng: number): void { this.viewLat = lat; this.viewLng = lng; }
+  centerOn(lat: number, lng: number): void { this.viewLat = lat; this.viewLng = lng; this.saveCameraSoon(); }
 
   /** WATCH: Anzeige auf Anflüge (in) oder Abflüge (out) beschränken */
   setWatchFilter(f: WatchFilter): void { this.watchFilter = f; }
