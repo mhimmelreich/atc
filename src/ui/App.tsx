@@ -90,7 +90,7 @@ export function App() {
     pendingCmdTypes: {}, display: { ...DEFAULT_DISPLAY },
     activeRunwayIds: [], radio: [],
     trafficMode: 'sim', live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {},
-    weather: null, runwaySource: 'default', watch: [], watchRoles: {}, spectator: null,
+    weather: null, runwaySource: 'default', watch: [], watchRoles: {}, watchLanded: [], spectator: null,
   });
   const watching = gameState.trafficMode === 'watch';
   // WATCH: Standort per GPS (Browser) – der nächste Verkehrsflughafen wird der gewählte Platz
@@ -327,19 +327,20 @@ export function App() {
   }, [traceHex]);
 
   // ── WATCH: ohne gewählten Flug automatisch den voraussichtlich nächsten Lander wählen ──
-  // Nach dessen Landung (am Boden) oder wenn er verschwindet, kommt der nächste dran. Eine eigene Wahl bleibt.
+  // Nach dessen Landung (ALT von über 0 auf 0) oder wenn er verschwindet, kommt der nächste dran. Eine eigene Wahl bleibt.
   const autoSelRef = useRef<string | null>(null);
   useEffect(() => {
     if (!watching || !airport || watchFilter === 'out') return;
     const sel = gameState.selectedId;
     const selAc = sel ? gameState.watch.find((a) => `live-${a.hex}` === sel) : undefined;
-    if (selAc && !(sel === autoSelRef.current && selAc.ground)) return;
-    const next = nextLander(gameState.watch, gameState.watchRoles, airport);
+    const landed = new Set(gameState.watchLanded);
+    if (selAc && !(sel === autoSelRef.current && landed.has(selAc.hex))) return;
+    const next = nextLander(gameState.watch, gameState.watchRoles, airport, landed);
     const id = next ? `live-${next.hex}` : null;
     if (!id || id === sel) return;
     autoSelRef.current = id;
     engineRef.current?.selectAircraft(id);
-  }, [watching, airport, watchFilter, gameState.watch, gameState.watchRoles, gameState.selectedId]);
+  }, [watching, airport, watchFilter, gameState.watch, gameState.watchRoles, gameState.watchLanded, gameState.selectedId]);
 
   // ── WATCH: Start und Ziel des gewählten Flugs im Klartext oben in der Mitte ──
   const [airportNames, setAirportNames] = useState<Record<string, { name: string; country: string }>>({});
@@ -847,11 +848,11 @@ function DisplayBar({ display, onChange, extra = [] }: { display: DisplayOptions
  * Anflug, der voraussichtlich als nächster landet: kleinste geschätzte Restflugzeit. Die Strecke
  * wächst mit dem Winkel zwischen Kurs und Richtung zum Platz (Gegenanflug ≈ doppelte Entfernung).
  */
-function nextLander(watch: LiveAircraft[], roles: Record<string, LiveInbound>, airport: Airport): LiveAircraft | null {
+function nextLander(watch: LiveAircraft[], roles: Record<string, LiveInbound>, airport: Airport, landed: Set<string>): LiveAircraft | null {
   let best: LiveAircraft | null = null, bestEta = Infinity;
   for (const ac of watch) {
     const role = roles[ac.hex];
-    if (!role || role.out || ac.ground || ac.altFt === null) continue;
+    if (!role || role.out || landed.has(ac.hex) || ac.ground || ac.altFt === null || ac.altFt <= 0) continue;
     const d = distanceNM(ac.lat, ac.lng, airport.lat, airport.lng);
     const off = ac.track === null ? 0 : ((bearingBetween(ac.lat, ac.lng, airport.lat, airport.lng) - ac.track) * Math.PI) / 180;
     const eta = (d * (1 + 0.5 * (1 - Math.cos(off)))) / Math.max(ac.gs ?? 0, 120);

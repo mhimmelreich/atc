@@ -71,6 +71,8 @@ export interface GameState {
   watch: LiveAircraft[];
   /** WATCH: Anflüge und Abflüge des gewählten Platzes, nach hex */
   watchRoles: Record<string, LiveInbound>;
+  /** Gelandet = abgeschlossen: kam aus ALT > 0 auf ALT 0 bzw. Boden (hex) */
+  watchLanded: string[];
   /** WATCH: Standort des Zuschauers per GPS (null: am gewählten Platz) */
   spectator: Spectator | null;
 }
@@ -135,6 +137,7 @@ export class GameEngine {
     runwaySource: 'default',
     watch: [],
     watchRoles: {},
+    watchLanded: [],
     spectator: null,
   };
   get rangeNM(): number { return this.state.rangeNM; }
@@ -152,7 +155,9 @@ export class GameEngine {
   private track: RenderOptions['track'] = null;                            // WATCH: Flugbahn des gewählten Fliegers
   private starGuesses = new Map<string, StarGuess>();
   private towns: Town[] = [];                                               // WATCH: Ortschaften (schon nach Einwohnern gefiltert)                       // WATCH: hex → wahrscheinliche STAR
-  private liveDepartures = new Map<string, number>();                       // WATCH: hex → zuletzt beim Start gesehen
+  private liveDepartures = new Map<string, number>();
+  private liveAirborne = new Set<string>();                                 // hex mit zuletzt ALT > 0
+  private liveLanded = new Set<string>();                                   // hex: von ALT > 0 auf 0 gekommen → gelandet, abgeschlossen                       // WATCH: hex → zuletzt beim Start gesehen
   private liveOutbound = new Map<string, string | undefined>();              // WATCH: hex → Zielplatz der Abflüge
 
   /** Echte Flieger auf dem Radar (LIVE zum Lotsen, WATCH nur zum Zuschauen) */
@@ -225,6 +230,8 @@ export class GameEngine {
     this.clearLive();
     this.liveFinals.clear();
     this.liveDepartures.clear();
+    this.liveAirborne.clear();
+    this.liveLanded.clear();
     if (this.state.trafficMode === 'sim') for (let i = 0; i < 3; i++) this.manager.forceSpawn();
   }
 
@@ -241,6 +248,8 @@ export class GameEngine {
     this.clearLive();
     this.liveFinals.clear();
     this.liveDepartures.clear();
+    this.liveAirborne.clear();
+    this.liveLanded.clear();
     if (mode === 'sim' && this.airport) for (let i = 0; i < 3; i++) this.manager.forceSpawn();
     this.trySave();
   }
@@ -260,13 +269,14 @@ export class GameEngine {
     this.detectRunwayInUse(list);
     if (this.watching) this.detectDepartures(list);
 
+    this.detectLandings(list);
     // Anflüge zum gewählten Platz; zwischen 60 und 25 NM melden sie sich (nächster zuerst)
     this.liveInbound.clear();
     const calls: Array<{ ac: LiveAircraft; dist: number }> = [];
     const airport = this.airport;
     if (airport) {
       for (const ac of list) {
-        const inb = this.takenOver.has(ac.hex) ? null : inbound(ac, airport);
+        const inb = this.takenOver.has(ac.hex) || this.liveLanded.has(ac.hex) ? null : inbound(ac, airport);
         if (!inb) continue;
         this.liveInbound.set(ac.hex, inb);
         if (callsIn(ac, inb, airport)) calls.push({ ac, dist: distanceNM(ac.lat, ac.lng, airport.lat, airport.lng) });
@@ -410,6 +420,7 @@ export class GameEngine {
         ...this.state, aircraft, conflicts: this.conflicts, pendingCmdTypes, selectedId,
         watch: this.watching ? live : this.state.watch.length ? [] : this.state.watch,
         watchRoles: this.watching ? Object.fromEntries(roles) : this.state.watch.length ? {} : this.state.watchRoles,
+        watchLanded: this.watching ? [...this.liveLanded] : [],
       };
       this.onStateChange(this.state);
 
@@ -673,6 +684,26 @@ export class GameEngine {
       this.state = { ...this.state, runwaySource: 'live' };
       this.trySave();
     }
+  }
+
+  /**
+   * Gelandet und damit abgeschlossen: ALT kommt von über 0 auf 0 (bzw. Boden). Steigt er wieder,
+   * ist es ein neuer Flug. WATCH meldet die Landung im Log.
+   */
+  private detectLandings(list: LiveAircraft[]): void {
+    const seen = new Set<string>();
+    for (const ac of list) {
+      seen.add(ac.hex);
+      if (!ac.ground && ac.altFt !== null && ac.altFt > 0) {
+        this.liveAirborne.add(ac.hex);
+        this.liveLanded.delete(ac.hex);
+      } else if ((ac.ground || (ac.altFt !== null && ac.altFt <= 0)) && this.liveAirborne.delete(ac.hex)) {
+        this.liveLanded.add(ac.hex);
+        if (this.watching) this.manager.info(`${ac.callsign}${ac.type ? ` (${ac.type})` : ''} gelandet`, liveId(ac.hex), ac.callsign);
+      }
+    }
+    for (const hex of this.liveAirborne) if (!seen.has(hex)) this.liveAirborne.delete(hex);
+    for (const hex of this.liveLanded) if (!seen.has(hex)) this.liveLanded.delete(hex);
   }
 
   /** WATCH: Starts vom gewählten Platz einmal im Log melden (nah, tief, steigend) */
