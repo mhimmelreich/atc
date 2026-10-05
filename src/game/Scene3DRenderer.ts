@@ -2,7 +2,7 @@
 import type { Aircraft } from '@/types/aircraft';
 import type { Runway } from '@/types/airport';
 import type { STAR, Waypoint } from '@/types/navdata';
-import { drawSpectator, drawTowns, type RenderOptions } from './RadarRenderer';
+import { drawSpectator, drawTowns, LANDMARK_RGB, sourceCredit, type RenderOptions } from './RadarRenderer';
 import { destinationPoint, toRad } from '@/utils/geo';
 import { typeData } from './constants';
 import { aircraftSilhouette } from './aircraftSymbol';
@@ -210,6 +210,7 @@ export class Scene3DRenderer {
         this.ctx.stroke();
       }
     }
+    if (o.landmarks?.length) this.drawLandmarks(o);
     if (o.track && o.live) {
       // Bisherige Flugbahn in ihrer Höhe, mit Loten alle paar Punkte
       const now = o.live.aircraft.find((a) => a.hex === o.track!.hex);
@@ -247,6 +248,68 @@ export class Scene3DRenderer {
     }
     this.drawTargets(o);
     this.drawHud(o, cam);
+    ctx.restore();
+  }
+
+  // ── Markante Bauwerke als Körper in echter Höhe (Fuß MSL wie die Flieger, also ebenso überhöht) ──
+  private drawLandmarks(o: RenderOptions): void {
+    const { ctx } = this;
+    const d = Scene3DRenderer.distanceFor(o.rangeNM);
+    // Gelände etwa auf Platzhöhe: Dach = Platzhöhe + Bauwerkshöhe, damit Flieger daneben richtig hoch oder tief wirken
+    const elevFt = o.airport?.elevationFt ?? 0;
+    const items = o.landmarks!
+      .map((l) => ({ l, c: this.camSpace(this.world(l.lat, l.lng, 0)) }))
+      .filter(({ c }) => c.z > this.near && c.z < d * 4)
+      .sort((a, b) => b.c.z - a.c.z); // von hinten nach vorn
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.font = '9px "Courier New"';
+    ctx.textAlign = 'center';
+    for (const { l, c } of items) {
+      const vis = Math.max(0.25, Math.min(1, 1 - (c.z - d) / (d * 2)));
+      const topFt = elevFt + l.heightM * 3.281;
+      ctx.strokeStyle = `rgba(${LANDMARK_RGB},${0.75 * vis})`;
+      ctx.fillStyle = `rgba(${LANDMARK_RGB},${0.16 * vis})`;
+      if (l.rings.length === 0) {
+        // Turm als Punkt: senkrechter Strich mit Spitze
+        const a = this.proj(this.world(l.lat, l.lng, 0));
+        const b = this.proj(this.world(l.lat, l.lng, topFt));
+        if (!a || !b) continue;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.lineWidth = 1;
+      } else {
+        for (const ring of l.rings) {
+          const base = ring.map(([lat, lng]) => this.proj(this.world(lat, lng, 0)));
+          const top = ring.map(([lat, lng]) => this.proj(this.world(lat, lng, topFt)));
+          if (base.some((p) => !p) || top.some((p) => !p)) continue;
+          const B = base as Pt[], T = top as Pt[];
+          // Wände halbdurchsichtig füllen, dann Dachkante und senkrechte Kanten
+          for (let i = 1; i < ring.length; i++) {
+            ctx.beginPath();
+            ctx.moveTo(B[i - 1].x, B[i - 1].y); ctx.lineTo(B[i].x, B[i].y); ctx.lineTo(T[i].x, T[i].y); ctx.lineTo(T[i - 1].x, T[i - 1].y);
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.beginPath();
+          T.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+          ctx.stroke();
+          ctx.beginPath();
+          B.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+          // Senkrechte Kanten nur an Ecken (bei runden Grundrissen sonst ein Strichgewirr)
+          const every = Math.max(1, Math.round(ring.length / 8));
+          for (let i = 0; i < ring.length - 1; i += every) { ctx.moveTo(B[i].x, B[i].y); ctx.lineTo(T[i].x, T[i].y); }
+          ctx.stroke();
+        }
+      }
+      if (o.display.labels && l.name && c.z < d * 1.5 && (l.heightM >= 150 || l.kind === 'stadium' || c.z < d * 0.6)) {
+        const p = this.proj(this.world(l.lat, l.lng, topFt));
+        if (p) {
+          ctx.fillStyle = `rgba(${LANDMARK_RGB},${0.85 * vis})`;
+          ctx.fillText(l.name.toUpperCase(), p.x, p.y - 5);
+        }
+      }
+    }
     ctx.restore();
   }
 
@@ -574,9 +637,10 @@ export class Scene3DRenderer {
     ctx.textAlign = 'left';
     const hdg = Math.round(((cam.yaw % 360) + 360) % 360).toString().padStart(3, '0');
     ctx.fillText(`3D  ${o.rangeNM.toFixed(0)} NM  HDG ${hdg}  TILT ${Math.round(cam.pitch)}°  ALT ×${ALT_EXAGGERATION}`, 8, 18);
-    if (o.live) {
+    const credit = sourceCredit(o);
+    if (credit) {
       ctx.fillStyle = 'rgba(150,170,160,0.6)';
-      ctx.fillText(`Traffic: adsb.lol (ODbL)${o.towns?.length ? ' · Orte: © OpenStreetMap' : ''}`, 8, this.cssH - 8);
+      ctx.fillText(credit, 8, this.cssH - 8);
     }
     // Kompassrose oben rechts: Pfeil zeigt nach Norden
     const cx = this.cssW - 28, cy = 28;
