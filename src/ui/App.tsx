@@ -311,7 +311,7 @@ export function App() {
   }, [traceHex]);
 
   // ── WATCH: Start und Ziel des gewählten Flugs im Klartext oben in der Mitte ──
-  const [airportNames, setAirportNames] = useState<Record<string, string>>({});
+  const [airportNames, setAirportNames] = useState<Record<string, { name: string; country: string }>>({});
   const selectedLive = watching ? gameState.watch.find((a) => `live-${a.hex}` === gameState.selectedId) : undefined;
   const selectedRoute = selectedLive?.route;
   useEffect(() => {
@@ -320,14 +320,18 @@ export function App() {
     fetch(`${import.meta.env.BASE_URL}api/opendata/names?icao=${missing.join(',')}`)
       .then((r) => (r.ok ? r.json() : {}))
       // Unbekannte merken (leer), damit nicht ständig nachgefragt wird
-      .then((names: Record<string, string>) => setAirportNames((prev) => ({ ...prev, ...Object.fromEntries(missing.map((c) => [c, names[c] ?? ''])) })))
+      .then((names: Record<string, { name: string; country: string }>) => setAirportNames((prev) => ({ ...prev, ...Object.fromEntries(missing.map((c) => [c, names[c] ?? { name: '', country: '' }])) })))
       .catch(() => { /* dann eben nur die Codes */ });
   }, [selectedRoute, airportNames]);
   const routeBanner = selectedLive
     ? {
         callsign: selectedLive.callsign,
         text: selectedRoute
-          ? selectedRoute.split('-').map((c) => (airportNames[c] ? `${airportNames[c]} (${c})` : c)).join('  →  ')
+          ? selectedRoute.split('-').map((c) => {
+              // Klarname (ICAO, Land)
+              const a = airportNames[c];
+              return a?.name ? `${a.name} (${c}${a.country ? `, ${a.country}` : ''})` : c;
+            }).join('  →  ')
           : 'Start und Ziel unbekannt',
       }
     : null;

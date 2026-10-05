@@ -235,7 +235,7 @@ router.get('/telephony', async (_req, res) => {
   }
 });
 
-// Klarnamen von Flughäfen, z. B. für Start und Ziel eines Flugs: ?icao=EDDF,EGLL
+// Klarnamen und Länder (ISO-Code) von Flughäfen, z. B. für Start und Ziel eines Flugs: ?icao=EDDF,EGLL
 router.get('/names', async (req, res) => {
   const codes = String(req.query.icao ?? '').toUpperCase().split(',').filter((c) => /^[A-Z0-9]{3,4}$/.test(c)).slice(0, 20);
   let d: OpenData;
@@ -245,8 +245,8 @@ router.get('/names', async (req, res) => {
     res.status(503).json({ error: 'Flughafendaten nicht verfügbar' });
     return;
   }
-  const names: Record<string, string> = {};
-  for (const c of codes) { const a = d.airports.get(c); if (a?.name) names[c] = a.name; }
+  const names: Record<string, { name: string; country: string }> = {};
+  for (const c of codes) { const a = d.airports.get(c); if (a?.name) names[c] = { name: a.name, country: a.iso_country ?? '' }; }
   res.setHeader('Cache-Control', 'public, max-age=86400');
   res.json(names);
 });
