@@ -337,6 +337,16 @@ export class Scene3DRenderer {
       if (z > this.near) items.push({ z, ring, topFt: elevFt + t.heightM * 3.281, rgb: COL.TOWER, label: t.label, lat: t.lat, lng: t.lng });
     }
     items.sort((a, b) => b.z - a.z);
+    // Viele Terminalteile tragen denselben Namen: nur einmal beschriften, am größten Teil, und nur in der Nähe
+    const labelled = new Map<string, Item>();
+    const dMax = Scene3DRenderer.distanceFor(2);
+    for (const it of items) {
+      const name = it.label;
+      if (!name || it.z > dMax) continue;
+      const best = labelled.get(name);
+      if (!best || it.ring.length > best.ring.length) labelled.set(name, it);
+    }
+    const showLabel = new Set(labelled.values());
     ctx.save();
     ctx.lineWidth = 1;
     ctx.font = '9px "Courier New"';
@@ -360,9 +370,9 @@ export class Scene3DRenderer {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
-      if (labels && it.label) {
+      if (labels && showLabel.has(it)) {
         const p = this.proj(this.world(it.lat, it.lng, it.topFt));
-        if (p) { ctx.fillStyle = `rgba(${it.rgb},0.9)`; ctx.fillText(it.label, p.x, p.y - 4); }
+        if (p) { ctx.fillStyle = `rgba(${it.rgb},0.9)`; ctx.fillText(it.label ?? '', p.x, p.y - 4); }
       }
     }
     ctx.restore();

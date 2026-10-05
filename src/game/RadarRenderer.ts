@@ -505,8 +505,13 @@ export class RadarRenderer {
     ctx.fillStyle = C.TERMINAL_LABEL;
     ctx.font = '9px "Courier New"';
     ctx.textAlign = 'center';
+    // Teile mit demselben Namen nur einmal beschriften (am Teil mit den meisten Punkten)
+    const best = new Map<string, OsmWay>();
     for (const t of layer.terminals) {
-      if (!t.tags.name && !t.tags.ref) continue;
+      const name = t.tags.name ?? t.tags.ref;
+      if (name && (!best.get(name) || t.geometry.length > best.get(name)!.geometry.length)) best.set(name, t);
+    }
+    for (const t of best.values()) {
       const lats = t.geometry.map((p) => p.lat);
       const lngs = t.geometry.map((p) => p.lng);
       const midLat = (Math.max(...lats) + Math.min(...lats)) / 2;
