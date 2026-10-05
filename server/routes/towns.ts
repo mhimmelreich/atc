@@ -8,7 +8,8 @@ import { join } from 'node:path';
 const router = Router();
 
 const DATA_DIR = process.env.TOWNS_DIR ?? 'data/towns';
-const OVERPASS = 'https://overpass-api.de/api/interpreter';
+// Hauptserver ist oft überlastet (504): abwechselnd ein Spiegel
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
 const OVERPASS_TRIES = 4;
 const WIKIDATA = 'https://query.wikidata.org/sparql';
 const USER_AGENT = 'atc-game (games.himmelreich.cloud)';
@@ -97,12 +98,12 @@ export interface OsmElement {
 }
 
 export async function overpass(query: string): Promise<OsmElement[]> {
-  // Overpass ist oft ausgelastet (429/504): mit wachsender Pause erneut versuchen
+  // Overpass ist oft ausgelastet (429/504): mit wachsender Pause erneut versuchen, im Wechsel mit dem Spiegel
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt < OVERPASS_TRIES; attempt++) {
     if (attempt > 0) await new Promise((ok) => setTimeout(ok, 15_000 * attempt));
     try {
-      const res = await fetch(OVERPASS, {
+      const res = await fetch(OVERPASS[attempt % OVERPASS.length], {
         method: 'POST',
         headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `data=${encodeURIComponent(query)}`,

@@ -5,12 +5,15 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { join } from 'node:path';
 import { overpass, simplify, stitch, type OsmElement } from './towns.js';
 
+const WIKIDATA = 'https://query.wikidata.org/sparql';
+const USER_AGENT = 'atc-game (games.himmelreich.cloud)';
+
 const router = Router();
 
 const DATA_DIR = process.env.LANDMARKS_DIR ?? 'data/landmarks';
 const RADIUS_M = 60_000;
 const MIN_HEIGHT_M = 100;          // Hochhäuser, Türme und Schornsteine ab dieser Höhe
-const STADIUM_MIN_AREA_M2 = 25_000; // nur große Stadien (Deutsche Bank Park etwa 60 000 m²)
+const STADIUM_MIN_CAPACITY = 15_000; // nur große Stadien; Plätze aus OSM (capacity) oder Wikidata (P1083)
 const STADIUM_HEIGHT_M = 35;        // wenn OSM keine Höhe kennt
 const MAX_AGE_MS = 30 * 86400_000;
 const SIMPLIFY_DEG = 0.00003;       // etwa 3 m
@@ -56,21 +59,36 @@ function ringsOf(el: OsmElement & { geometry?: Geom }): Landmark['rings'] {
     .map((r) => simplify(r, SIMPLIFY_DEG).map(([la, lo]) => [round(la), round(lo)] as [number, number]));
 }
 
-/** Fläche in m² (Schuhbandformel, lokal eben) */
-function areaM2(rings: Landmark['rings']): number {
-  let sum = 0;
-  for (const r of rings) {
-    const k = Math.cos((r[0][0] * Math.PI) / 180);
-    let a = 0;
-    for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += (r[j][1] * k + r[i][1] * k) * (r[j][0] - r[i][0]);
-    sum += Math.abs(a / 2);
+/** Zuschauerplätze aus Wikidata (P1083, CC0); die Fläche in OSM unterscheidet Bundesliga-Stadion und Sportplatz nicht */
+async function wikidataCapacities(ids: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const valid = [...new Set(ids.filter((id) => /^Q\d+$/.test(id)))];
+  if (valid.length === 0) return out;
+  const query = `SELECT ?item ?cap WHERE { VALUES ?item { ${valid.map((id) => `wd:${id}`).join(' ')} } ?item wdt:P1083 ?cap }`;
+  try {
+    const res = await fetch(WIKIDATA, {
+      method: 'POST',
+      headers: { 'User-Agent': USER_AGENT, Accept: 'application/sparql-results+json', 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `query=${encodeURIComponent(query)}`,
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`Wikidata HTTP ${res.status}`);
+    const data = (await res.json()) as { results: { bindings: Array<{ item: { value: string }; cap: { value: string } }> } };
+    for (const b of data.results.bindings) {
+      const id = b.item.value.split('/').pop()!;
+      const cap = Math.round(Number(b.cap.value));
+      if (Number.isFinite(cap) && cap > (out.get(id) ?? 0)) out.set(id, cap);
+    }
+  } catch (err) {
+    console.error('landmarks: Wikidata:', (err as Error).message);
   }
-  return sum * 111_320 ** 2;
+  return out;
 }
 
-function centre(el: OsmElement & { center?: { lat: number; lon: number } }, rings: Landmark['rings']): [number, number] {
+const capacityOf = (tags: Record<string, string>) => Number((tags.capacity ?? '').replace(/[ .,]/g, '')) || 0;
+
+function centre(el: OsmElement, rings: Landmark['rings']): [number, number] {
   if (el.lat !== undefined && el.lon !== undefined) return [el.lat, el.lon];
-  if (el.center) return [el.center.lat, el.center.lon];
   const r = rings[0];
   return [r.reduce((s, p) => s + p[0], 0) / r.length, r.reduce((s, p) => s + p[1], 0) / r.length];
 }
@@ -82,9 +100,12 @@ async function fetchLandmarks(lat: number, lon: number): Promise<Landmark[]> {
   const h = '[height~"^[1-9][0-9][0-9]([.,][0-9]+)?( ?m)?$"]';
   const els = (await overpass(
     `[out:json][timeout:110];(nwr(${bbox})[building]${h};nwr(${bbox})[man_made~"^(tower|chimney)$"]${h};` +
-    `wr(${bbox})[leisure=stadium][name];);out geom center qt;`,
-  )) as Array<OsmElement & { geometry?: Geom; center?: { lat: number; lon: number } }>;
+    `wr(${bbox})[leisure=stadium][name];);out geom qt;`,
+  )) as Array<OsmElement & { geometry?: Geom }>;
 
+  const wdCap = await wikidataCapacities(
+    els.filter((e) => e.tags?.leisure === 'stadium' && !capacityOf(e.tags) && e.tags.wikidata).map((e) => e.tags!.wikidata),
+  );
   const out: Landmark[] = [];
   for (const el of els) {
     const t = el.tags ?? {};
@@ -93,9 +114,12 @@ async function fetchLandmarks(lat: number, lon: number): Promise<Landmark[]> {
     const tower = !!t.man_made;
     let heightM = heightOf(t);
     if (stadium) {
-      if (rings.length === 0 || areaM2(rings) < STADIUM_MIN_AREA_M2) continue;
+      const cap = capacityOf(t) || (t.wikidata ? wdCap.get(t.wikidata) ?? 0 : 0);
+      if (rings.length === 0 || cap < STADIUM_MIN_CAPACITY) continue;
       if (!(heightM > 0 && heightM < 100)) heightM = STADIUM_HEIGHT_M;
     } else if (heightM < MIN_HEIGHT_M || heightM > 700) continue;
+    // Gebäude ohne Namen ab 100 m sind meist Fehlerfassungen; Türme und Schornsteine dürfen namenlos sein
+    if (!tower && !stadium && !t.name) continue;
     if (!tower && !stadium && rings.length === 0) continue;
     const [cLat, cLng] = centre(el, rings);
     out.push({ name: t.name ?? null, kind: stadium ? 'stadium' : tower ? 'tower' : 'building', heightM: Math.round(heightM), lat: round(cLat), lng: round(cLng), rings });
