@@ -85,6 +85,18 @@ async function wikidataCapacities(ids: string[]): Promise<Map<string, number>> {
   return out;
 }
 
+/** Grundfläche in m² (Schuhbandformel, lokal eben) */
+function areaM2(rings: Landmark['rings']): number {
+  let sum = 0;
+  for (const r of rings) {
+    const k = Math.cos((r[0][0] * Math.PI) / 180);
+    let a = 0;
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += (r[j][1] + r[i][1]) * k * (r[j][0] - r[i][0]);
+    sum += Math.abs(a / 2);
+  }
+  return sum * 111_320 ** 2;
+}
+
 const capacityOf = (tags: Record<string, string>) => Number((tags.capacity ?? '').replace(/[ .,]/g, '')) || 0;
 
 function centre(el: OsmElement, rings: Landmark['rings']): [number, number] {
@@ -121,6 +133,8 @@ async function fetchLandmarks(lat: number, lon: number): Promise<Landmark[]> {
     // Gebäude ohne Namen ab 100 m sind meist Fehlerfassungen; Türme und Schornsteine dürfen namenlos sein
     if (!tower && !stadium && !t.name) continue;
     // Hütten, Schuppen usw. über 100 m sind Tippfehler (z. B. Geländehöhe statt Gebäudehöhe)
+    // Ein Hochhaus über 100 m mit weniger als 300 m² Grundfläche gibt es nicht (z. B. Grillhütte mit Geländehöhe)
+    if (!tower && !stadium && areaM2(rings) < 300) continue;
     if (!tower && !stadium && /^(hut|shed|cabin|shelter|garage|garages|roof|barn|kiosk|toilets|house|bungalow)$/.test(t.building ?? '')) continue;
     if (!tower && !stadium && rings.length === 0) continue;
     const [cLat, cLng] = centre(el, rings);
