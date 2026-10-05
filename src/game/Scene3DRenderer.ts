@@ -3,9 +3,9 @@ import type { Aircraft } from '@/types/aircraft';
 import type { Runway } from '@/types/airport';
 import type { STAR, Waypoint } from '@/types/navdata';
 import { drawSpectator, drawTowns, LANDMARK_RGB, sourceCredit, type RenderOptions } from './RadarRenderer';
-import { destinationPoint, toRad } from '@/utils/geo';
+import { toRad } from '@/utils/geo';
 import { typeData } from './constants';
-import { aircraftSilhouette } from './aircraftSymbol';
+import { modelFaces, modelShape, SCREEN_SPAN_PX } from './aircraftModel3D';
 
 /** Höhen werden standardmäßig überhöht, sonst liegt bei 80 NM alles platt am Boden; ×1 = maßstabsgetreu */
 export const ALT_SCALES = [4, 2, 1] as const;
@@ -529,11 +529,12 @@ export class Scene3DRenderer {
         this.drawTrail(`live-${ac.hex}`, inbound?.out ? '255,190,90' : inbound ? '120,215,255' : '150,170,160', trailN);
         const p = this.drawStem(v, color, 0.25);
         if (!p) return;
+        this.drawModel(v, ac.type, ac.track ?? 0, ac.vs ?? 0, ac.gs ?? 250, color, selected);
         this.ctx.strokeStyle = color;
         this.ctx.lineWidth = 1;
-        this.ctx.strokeRect(p.x - 3, p.y - 3, 6, 6);
-        if (selected) { this.ctx.beginPath(); this.ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); this.ctx.stroke(); }
-        if (inbound?.called && Math.floor(o.now / 500) % 2 === 0) { this.ctx.fillStyle = color; this.ctx.fillRect(p.x - 3, p.y - 3, 6, 6); }
+        if (selected) { this.ctx.beginPath(); this.ctx.arc(p.x, p.y, 16, 0, Math.PI * 2); this.ctx.stroke(); }
+        // Hat sich gemeldet: blinkender Ring
+        if (inbound?.called && Math.floor(o.now / 500) % 2 === 0) { this.ctx.beginPath(); this.ctx.arc(p.x, p.y, 12, 0, Math.PI * 2); this.ctx.stroke(); }
         if (ac.altFt !== null && (selected || (o.display.labels && (inbound || ac.altFt < LIVE_LABEL_MAX_FT)))) {
           const fl = Math.round(ac.altFt / 100).toString().padStart(3, '0');
           const from = inbound?.out ? ` →${inbound.dest ?? ''}` : inbound ? ` ${inbound.guess ? '?' : inbound.origin ?? ''}` : '';
@@ -546,6 +547,53 @@ export class Scene3DRenderer {
       } });
     }
     items.sort((a, b) => b.depth - a.depth).forEach((i) => i.draw());
+  }
+
+  /**
+   * 3D-Flugzeugmodell an v: Kurs (rechtweisend), Längsneigung aus Steig-/Sinkrate (mit der Überhöhung),
+   * in fester Bildgröße je Größenklasse, Flächen nach Tiefe sortiert und nach Lichteinfall schattiert
+   */
+  private drawModel(v: Vec, type: string | undefined, headingDeg: number, vsFpm: number, gsKts: number, color: string, selected: boolean): void {
+    const c = this.camSpace(v);
+    if (c.z < this.near) return;
+    const shape = modelShape(type);
+    const scale = (SCREEN_SPAN_PX[shape.cls] * (selected ? 1.15 : 1) * (c.z / this.focal)) / shape.span; // NM je Modellmeter
+    const h = toRad(headingDeg);
+    const pitch = Math.max(-0.4, Math.min(0.4, Math.atan2((vsFpm / 60) * this.altScale, Math.max(gsKts, 100) * 1.688)));
+    const f0 = { x: Math.sin(h), y: Math.cos(h), z: 0 };
+    const fwd = { x: f0.x * Math.cos(pitch), y: f0.y * Math.cos(pitch), z: Math.sin(pitch) };
+    const up = { x: -f0.x * Math.sin(pitch), y: -f0.y * Math.sin(pitch), z: Math.cos(pitch) };
+    const right = { x: Math.cos(h), y: -Math.sin(h), z: 0 };
+    const [cr, cg, cb] = toRgb(color);
+    const light = norm({ x: -0.35, y: 0.45, z: 0.82 });
+    const faces: Array<{ depth: number; pts: Pt[]; shade: number }> = [];
+    for (const face of modelFaces(shape)) {
+      const w = face.map(([f, r, u]) => ({
+        x: v.x + (f * fwd.x + r * right.x + u * up.x) * scale,
+        y: v.y + (f * fwd.y + r * right.y + u * up.y) * scale,
+        z: v.z + (f * fwd.z + r * right.z + u * up.z) * scale,
+      }));
+      const pts = w.map((p) => this.proj(p));
+      if (pts.some((p) => !p)) continue;
+      const n = norm(cross(sub(w[1], w[0]), sub(w[2], w[0])));
+      const shade = 0.5 + 0.5 * Math.abs(dot(n, light));
+      faces.push({ depth: pts.reduce((s, p) => s + p!.depth, 0) / pts.length, pts: pts as Pt[], shade });
+    }
+    const { ctx } = this;
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 0.6;
+    for (const fc of faces.sort((a, b) => b.depth - a.depth)) {
+      const k = fc.shade;
+      ctx.fillStyle = `rgb(${Math.round(cr * k)},${Math.round(cg * k)},${Math.round(cb * k)})`;
+      ctx.strokeStyle = `rgba(${Math.round(cr * 0.35)},${Math.round(cg * 0.35)},${Math.round(cb * 0.35)},0.9)`;
+      ctx.beginPath();
+      fc.pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /** Lot vom Flieger zum Boden mit Schattenpunkt; gibt die Bildposition des Fliegers zurück */
@@ -598,19 +646,8 @@ export class Scene3DRenderer {
     const p = this.drawStem(v, color, 0.45);
     if (!p) return;
 
-    // Symbol zeigt die Flugrichtung, wie sie aus dieser Perspektive erscheint
-    const ahead = destinationPoint(ac.lat, ac.lng, ac.headingDeg, 1);
-    const q = this.proj(this.world(ahead.lat, ahead.lng, ac.altitudeFt));
-    const rot = q ? Math.atan2(q.x - p.x, -(q.y - p.y)) : 0;
-    const size = selected ? 12 : 10;
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.rotate(rot);
-    ctx.fillStyle = color;
-    aircraftSilhouette(ctx, size);
-    ctx.fill();
-    if (selected) { ctx.strokeStyle = COL.WHITE; ctx.lineWidth = 1.5; ctx.stroke(); }
-    ctx.restore();
+    // Kleines 3D-Modell in Flugrichtung, nach Typ (Größe, 2 oder 4 Triebwerke)
+    this.drawModel(v, ac.type, ac.headingDeg, ac.verticalSpeedFpm, ac.speedKts, color, selected);
 
     if (labels || selected) {
       const fl = Math.round(ac.altitudeFt / 100).toString().padStart(3, '0');
@@ -676,4 +713,12 @@ const norm = (a: Vec): Vec => { const l = Math.hypot(a.x, a.y, a.z) || 1; return
 function lerpToNear(a: Vec, b: Vec, near: number): Vec {
   const t = (near - a.z) / (b.z - a.z);
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: near };
+}
+
+/** "#rrggbb" oder "rgb(a)(r,g,b[,a])" → [r, g, b] */
+function toRgb(color: string): [number, number, number] {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(color);
+  if (m) return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+  const n = color.match(/[\d.]+/g)?.map(Number) ?? [200, 200, 200];
+  return [n[0], n[1], n[2]];
 }
