@@ -22,7 +22,8 @@ import { loadTelephony } from '@/game/Telephony';
 import { fetchLiveTraffic, fetchTrace, LIVE_POLL_MS } from '@/services/LiveTrafficService';
 import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
 import { fetchTowns, type Town } from '@/services/TownService';
-import type { TrafficMode, WatchFilter } from '@/types/live';
+import type { LiveAircraft, LiveInbound, TrafficMode, WatchFilter } from '@/types/live';
+import { bearingBetween, distanceNM } from '@/utils/geo';
 
 const SIDEBAR_W = 288;
 const MOBILE_BREAKPOINT = 700;
@@ -320,6 +321,21 @@ export function App() {
     const id = setInterval(load, 60_000);
     return () => { stopped = true; clearInterval(id); };
   }, [traceHex]);
+
+  // ── WATCH: ohne gewählten Flug automatisch den voraussichtlich nächsten Lander wählen ──
+  // Nach dessen Landung (am Boden) oder wenn er verschwindet, kommt der nächste dran. Eine eigene Wahl bleibt.
+  const autoSelRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!watching || !airport || watchFilter === 'out') return;
+    const sel = gameState.selectedId;
+    const selAc = sel ? gameState.watch.find((a) => `live-${a.hex}` === sel) : undefined;
+    if (selAc && !(sel === autoSelRef.current && selAc.ground)) return;
+    const next = nextLander(gameState.watch, gameState.watchRoles, airport);
+    const id = next ? `live-${next.hex}` : null;
+    if (!id || id === sel) return;
+    autoSelRef.current = id;
+    engineRef.current?.selectAircraft(id);
+  }, [watching, airport, watchFilter, gameState.watch, gameState.watchRoles, gameState.selectedId]);
 
   // ── WATCH: Start und Ziel des gewählten Flugs im Klartext oben in der Mitte ──
   const [airportNames, setAirportNames] = useState<Record<string, { name: string; country: string }>>({});
@@ -821,4 +837,21 @@ function DisplayBar({ display, onChange, extra = [] }: { display: DisplayOptions
       ))}
     </div>
   );
+}
+
+/**
+ * Anflug, der voraussichtlich als nächster landet: kleinste geschätzte Restflugzeit. Die Strecke
+ * wächst mit dem Winkel zwischen Kurs und Richtung zum Platz (Gegenanflug ≈ doppelte Entfernung).
+ */
+function nextLander(watch: LiveAircraft[], roles: Record<string, LiveInbound>, airport: Airport): LiveAircraft | null {
+  let best: LiveAircraft | null = null, bestEta = Infinity;
+  for (const ac of watch) {
+    const role = roles[ac.hex];
+    if (!role || role.out || ac.ground || ac.altFt === null) continue;
+    const d = distanceNM(ac.lat, ac.lng, airport.lat, airport.lng);
+    const off = ac.track === null ? 0 : ((bearingBetween(ac.lat, ac.lng, airport.lat, airport.lng) - ac.track) * Math.PI) / 180;
+    const eta = (d * (1 + 0.5 * (1 - Math.cos(off)))) / Math.max(ac.gs ?? 0, 120);
+    if (eta < bestEta) { bestEta = eta; best = ac; }
+  }
+  return best;
 }
