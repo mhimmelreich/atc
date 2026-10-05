@@ -205,22 +205,26 @@ export class Scene3DRenderer {
       const now = o.live.aircraft.find((a) => a.hex === o.track!.hex);
       const pts = [...o.track.points, ...(now ? [now] : [])];
       const vs = pts.map((p) => this.world(p.lat, p.lng, p.altFt ?? 0));
-      this.ctx.strokeStyle = 'rgba(255,120,220,0.8)';
-      this.ctx.lineWidth = 1.5;
-      // Gemessen durchgezogen, geschätzt (Ozean ohne Empfang) gestrichelt
+      // Kräftiges Orange mit dunklem Rand; gemessen durchgezogen, geschätzt (Ozean ohne Empfang) gestrichelt
       const tp = o.track.points;
       const isEst = (i: number) => i < tp.length && tp[i].est === true;
-      for (const est of [false, true]) {
-        this.ctx.setLineDash(est ? [6, 5] : []);
-        this.ctx.beginPath();
-        for (let i = 1; i < vs.length; i++) {
-          if ((isEst(i - 1) || isEst(i)) !== est) continue;
-          this.line(vs[i - 1], vs[i]);
+      this.ctx.lineCap = 'round';
+      for (const [color, width] of [['rgba(0,0,0,0.7)', 5], ['rgba(255,110,0,0.95)', 2.5]] as const) {
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = width;
+        for (const est of [false, true]) {
+          this.ctx.setLineDash(est ? [7, 6] : []);
+          this.ctx.beginPath();
+          for (let i = 1; i < vs.length; i++) {
+            if ((isEst(i - 1) || isEst(i)) !== est) continue;
+            this.line(vs[i - 1], vs[i]);
+          }
+          this.ctx.stroke();
         }
-        this.ctx.stroke();
       }
       this.ctx.setLineDash([]);
-      this.ctx.strokeStyle = 'rgba(255,120,220,0.15)';
+      this.ctx.lineCap = 'butt';
+      this.ctx.strokeStyle = 'rgba(255,110,0,0.2)';
       this.ctx.lineWidth = 1;
       this.ctx.beginPath();
       const every = Math.max(1, Math.round(pts.length / 40));

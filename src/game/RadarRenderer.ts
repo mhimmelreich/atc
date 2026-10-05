@@ -56,7 +56,8 @@ const C = {
   LIVE_TRAIL:       'rgba(150,170,160,',
   LIVE_INBOUND:     'rgba(120,215,255,0.95)',
   LIVE_OUTBOUND:    'rgba(255,190,90,0.95)',
-  TRACK:            'rgba(255,120,220,0.75)',
+  TRACK:            'rgba(255,110,0,0.95)',   // kräftiges Orange, hebt sich von STAR (violett), ILS (blau) und Abflügen (blasses Gelborange) ab
+  TRACK_HALO:       'rgba(0,0,0,0.7)',
 };
 
 // Echte Flieger: Beschriftung nur unterhalb dieser Höhe (darüber Überflieger ohne Bezug zum Platz)
@@ -218,22 +219,26 @@ export class RadarRenderer {
       const now = opts.live.aircraft.find((a) => a.hex === opts.track!.hex);
       const raw = [...opts.track.points, ...(now ? [now] : [])];
       const pts = raw.map((p) => ll2c(p.lat, p.lng));
-      ctx.strokeStyle = C.TRACK;
-      ctx.lineWidth = 1.5;
-      // Gemessen durchgezogen, geschätzt (Ozean ohne Empfang) gestrichelt
+      // Gemessen durchgezogen, geschätzt (Ozean ohne Empfang) gestrichelt; dunkler Rand für Kontrast
       const tp = opts.track.points;
       const isEst = (i: number) => i < tp.length && tp[i].est === true;
-      for (const est of [false, true]) {
-        ctx.setLineDash(est ? [6, 5] : []);
-        ctx.beginPath();
-        for (let i = 1; i < pts.length; i++) {
-          if ((isEst(i - 1) || isEst(i)) !== est) continue;
-          ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
-          ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.lineCap = 'round';
+      for (const [color, width] of [[C.TRACK_HALO, 5], [C.TRACK, 2.5]] as const) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        for (const est of [false, true]) {
+          ctx.setLineDash(est ? [7, 6] : []);
+          ctx.beginPath();
+          for (let i = 1; i < pts.length; i++) {
+            if ((isEst(i - 1) || isEst(i)) !== est) continue;
+            ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+            ctx.lineTo(pts[i].x, pts[i].y);
+          }
+          ctx.stroke();
         }
-        ctx.stroke();
       }
       ctx.setLineDash([]);
+      ctx.lineCap = 'butt';
     }
     if (opts.live) this.drawLive(opts.live, ll2c, W, H, opts.trailLength, opts.display.labels, opts.now, opts.selectedId);
 
