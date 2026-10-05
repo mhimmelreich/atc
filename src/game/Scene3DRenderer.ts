@@ -5,7 +5,8 @@ import type { STAR, Waypoint } from '@/types/navdata';
 import { drawSpectator, drawTowns, LANDMARK_RGB, sourceCredit, type RenderOptions } from './RadarRenderer';
 import { toRad } from '@/utils/geo';
 import { typeData } from './constants';
-import { modelFaces, modelShape, SCREEN_SPAN_PX } from './aircraftModel3D';
+import { drawRunwayMarkings } from './runwayMarkings';
+import { modelFaces, modelShape, MODEL_PX_PER_M, MODEL_MIN_SPAN_PX } from './aircraftModel3D';
 
 /** Höhen werden standardmäßig überhöht, sonst liegt bei 80 NM alles platt am Boden; ×1 = maßstabsgetreu */
 export const ALT_SCALES = [4, 2, 1] as const;
@@ -39,6 +40,7 @@ const COL = {
   RING: 'rgba(0,255,136,0.13)',
   RING_LABEL: 'rgba(0,255,136,0.35)',
   RWY: '#c8c8c8',
+  RWY_SURFACE: '#596066',
   RWY_LABEL: '#aaaaaa',
   GLIDE: 'rgba(68,136,255,0.75)',
   GLIDE_GROUND: 'rgba(68,136,255,0.25)',
@@ -354,18 +356,42 @@ export class Scene3DRenderer {
 
   private drawRunways(runways: Runway[], labels: boolean): void {
     const { ctx } = this;
-    ctx.strokeStyle = COL.RWY;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    for (const r of runways) this.line(this.world(r.thresholdLat, r.thresholdLng), this.world(r.endLat, r.endLng));
-    ctx.stroke();
+    const drawn = new Set<string>();
+    for (const r of runways) {
+      const key = [r.id, r.recipId].sort().join(':');
+      if (drawn.has(key)) continue;
+      drawn.add(key);
+      const t = this.world(r.thresholdLat, r.thresholdLng), e = this.world(r.endLat, r.endLng);
+      const lenNM = Math.hypot(e.x - t.x, e.y - t.y);
+      if (lenNM < 1e-4) continue;
+      const ux = (e.x - t.x) / lenNM, uy = (e.y - t.y) / lenNM;
+      // Bahnkoordinaten (Meter längs/quer, rechts positiv) → Welt → Bild
+      const P = (a: number, c: number) => {
+        const p = this.proj({ x: t.x + (ux * a + uy * c) / 1852, y: t.y + (uy * a - ux * c) / 1852, z: t.z });
+        return p ? { x: p.x, y: p.y } : null;
+      };
+      // Maßstab am näheren Ende bestimmt, wie viel Markierung gezeichnet wird
+      const z = Math.min(this.camSpace(t).z, this.camSpace(e).z);
+      if (z < this.near) {
+        ctx.strokeStyle = COL.RWY;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        this.line(t, e);
+        ctx.stroke();
+        continue;
+      }
+      const pxPerM = this.focal / z / 1852;
+      const widthM = Math.max(r.widthM, 3 / pxPerM);
+      drawRunwayMarkings(ctx, P, lenNM * 1852, widthM, r.id, r.recipId, pxPerM, COL.RWY_SURFACE, 'rgba(235,235,235,0.85)');
+    }
     if (!labels) return;
     ctx.fillStyle = COL.RWY_LABEL;
     ctx.font = '9px "Courier New"';
     ctx.textAlign = 'center';
     for (const r of runways) {
       const p = this.proj(this.world(r.thresholdLat, r.thresholdLng));
-      if (p && p.depth < Scene3DRenderer.distanceFor(40)) ctx.fillText(r.id, p.x, p.y + 12);
+      // entfällt, sobald die aufgemalte Bezeichnung lesbar ist
+      if (p && p.depth < Scene3DRenderer.distanceFor(40) && (9 * this.focal) / p.depth / 1852 < 5) ctx.fillText(r.id, p.x, p.y + 12);
     }
   }
 
@@ -557,7 +583,9 @@ export class Scene3DRenderer {
     const c = this.camSpace(v);
     if (c.z < this.near) return;
     const shape = modelShape(type);
-    const scale = (SCREEN_SPAN_PX[shape.cls] * (selected ? 1.15 : 1) * (c.z / this.focal)) / shape.span; // NM je Modellmeter
+    // Fester Bildmaßstab je Meter, damit die Typen zueinander in echter Größe stehen
+    const spanPx = Math.max(MODEL_MIN_SPAN_PX, shape.span * MODEL_PX_PER_M) * (selected ? 1.15 : 1);
+    const scale = (spanPx * (c.z / this.focal)) / shape.span; // NM je Modellmeter
     const h = toRad(headingDeg);
     const pitch = Math.max(-0.4, Math.min(0.4, Math.atan2((vsFpm / 60) * this.altScale, Math.max(gsKts, 100) * 1.688)));
     const f0 = { x: Math.sin(h), y: Math.cos(h), z: 0 };
@@ -568,7 +596,7 @@ export class Scene3DRenderer {
     const light = norm({ x: -0.35, y: 0.45, z: 0.82 });
     const faces: Array<{ depth: number; pts: Pt[]; shade: number }> = [];
     for (const face of modelFaces(shape)) {
-      const w = face.map(([f, r, u]) => ({
+      const w = face.p.map(([f, r, u]) => ({
         x: v.x + (f * fwd.x + r * right.x + u * up.x) * scale,
         y: v.y + (f * fwd.y + r * right.y + u * up.y) * scale,
         z: v.z + (f * fwd.z + r * right.z + u * up.z) * scale,
@@ -576,17 +604,17 @@ export class Scene3DRenderer {
       const pts = w.map((p) => this.proj(p));
       if (pts.some((p) => !p)) continue;
       const n = norm(cross(sub(w[1], w[0]), sub(w[2], w[0])));
-      const shade = 0.5 + 0.5 * Math.abs(dot(n, light));
+      const shade = (0.5 + 0.5 * Math.abs(dot(n, light))) * face.tone;
       faces.push({ depth: pts.reduce((s, p) => s + p!.depth, 0) / pts.length, pts: pts as Pt[], shade });
     }
     const { ctx } = this;
     ctx.save();
     ctx.lineJoin = 'round';
-    ctx.lineWidth = 0.6;
+    ctx.lineWidth = 0.5;
     for (const fc of faces.sort((a, b) => b.depth - a.depth)) {
       const k = fc.shade;
       ctx.fillStyle = `rgb(${Math.round(cr * k)},${Math.round(cg * k)},${Math.round(cb * k)})`;
-      ctx.strokeStyle = `rgba(${Math.round(cr * 0.35)},${Math.round(cg * 0.35)},${Math.round(cb * 0.35)},0.9)`;
+      ctx.strokeStyle = ctx.fillStyle; // schließt die Fugen zwischen den Flächen
       ctx.beginPath();
       fc.pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
       ctx.closePath();
@@ -679,7 +707,7 @@ export class Scene3DRenderer {
     ctx.font = '11px "Courier New"';
     ctx.textAlign = 'left';
     const hdg = Math.round(((cam.yaw % 360) + 360) % 360).toString().padStart(3, '0');
-    ctx.fillText(`3D  ${o.rangeNM.toFixed(0)} NM  HDG ${hdg}  TILT ${Math.round(cam.pitch)}°  ALT ×${this.altScale}`, 8, 18);
+    ctx.fillText(`3D  ${o.rangeNM.toFixed(o.rangeNM < 2 ? 1 : 0)} NM  HDG ${hdg}  TILT ${Math.round(cam.pitch)}°  ALT ×${this.altScale}`, 8, 18);
     const credit = sourceCredit(o);
     if (credit) {
       ctx.fillStyle = 'rgba(150,170,160,0.6)';

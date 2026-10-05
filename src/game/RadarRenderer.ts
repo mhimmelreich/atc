@@ -3,6 +3,7 @@ import type { Aircraft, ConflictPair, TrailPoint } from '@/types/aircraft';
 import type { LiveAircraft, LiveInbound } from '@/types/live';
 import { typeData } from './constants';
 import { aircraftSilhouette } from './aircraftSymbol';
+import { drawRunwayMarkings } from './runwayMarkings';
 import type { Airport, AirportLayer, OsmWay } from '@/types/airport';
 import type { Waypoint, STAR } from '@/types/navdata';
 import { destinationPoint, toRad } from '@/utils/geo';
@@ -283,7 +284,7 @@ export class RadarRenderer {
     ctx.fillStyle = 'rgba(0,255,136,0.35)';
     ctx.font = '11px "Courier New"';
     ctx.textAlign = 'left';
-    ctx.fillText(`${opts.rangeNM.toFixed(0)} NM`, 8, 18);
+    ctx.fillText(`${opts.rangeNM.toFixed(opts.rangeNM < 2 ? 1 : 0)} NM`, 8, 18);
 
     // Quellenhinweis für Live-Daten und OSM-Daten (ODbL)
     const credit = sourceCredit(opts);
@@ -373,7 +374,9 @@ export class RadarRenderer {
   // ── Range rings ───────────────────────────────────────────────────────────
   private drawRangeRings(rangeNM: number, scale: number, cx: number, cy: number): void {
     const { ctx } = this;
-    const interval = rangeNM <= 4  ? 0.5
+    const interval = rangeNM <= 0.5 ? 0.1
+                   : rangeNM <= 1 ? 0.25
+                   : rangeNM <= 4  ? 0.5
                    : rangeNM <= 8  ? 1
                    : rangeNM <= 15 ? 2
                    : rangeNM <= 30 ? 5
@@ -519,40 +522,20 @@ export class RadarRenderer {
       const len = Math.sqrt(dx * dx + dy * dy);
       if (len < 0.5) continue;
 
-      const widthPx = Math.max(2, (rwy.widthM / 1852) * scale);
-      const nx = -dy / len, ny = dx / len;
-
-      // Surface
-      ctx.beginPath();
-      ctx.moveTo(p1.x + nx * widthPx / 2, p1.y + ny * widthPx / 2);
-      ctx.lineTo(p2.x + nx * widthPx / 2, p2.y + ny * widthPx / 2);
-      ctx.lineTo(p2.x - nx * widthPx / 2, p2.y - ny * widthPx / 2);
-      ctx.lineTo(p1.x - nx * widthPx / 2, p1.y - ny * widthPx / 2);
-      ctx.closePath();
-      ctx.fillStyle   = rangeNM <= 20 ? '#1c2a1c' : '#111';
-      ctx.fill();
-      ctx.strokeStyle = C.RWY_EDGE;
-      ctx.lineWidth   = 0.8;
-      ctx.stroke();
-
-      // Centreline dashes (close range only)
-      if (rangeNM <= 12 && len > 30) {
-        ctx.save();
-        ctx.strokeStyle = C.RWY_CTR;
-        ctx.lineWidth   = 0.6;
-        ctx.setLineDash([Math.max(5, len * 0.04), Math.max(4, len * 0.03)]);
+      // Fläche in echter Breite, Markierungen je nach Platz im Bild (runwayMarkings.ts)
+      const pxPerM = scale / 1852;
+      const ux = dx / len, uy = dy / len;
+      const P = (a: number, c: number) => ({ x: p1.x + (ux * a - uy * c) * pxPerM, y: p1.y + (uy * a + ux * c) * pxPerM });
+      const widthM = Math.max(rwy.widthM, 2 / pxPerM);
+      drawRunwayMarkings(ctx, P, len / pxPerM, widthM, rwy.id, rwy.recipId, pxPerM,
+        rangeNM <= 20 ? '#2a332a' : '#1a1a1a', 'rgba(235,235,235,0.85)');
+      if (widthM * pxPerM < 4) {
+        ctx.strokeStyle = C.RWY_EDGE;
+        ctx.lineWidth = 0.8;
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
         ctx.lineTo(p2.x, p2.y);
         ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
-      }
-
-      // Threshold bars
-      if (rangeNM <= 30) {
-        this.drawThresholdBar(p1, p2, widthPx);
-        this.drawThresholdBar(p2, p1, widthPx);
       }
 
       // Departure arrow for departure-only runways
@@ -575,37 +558,19 @@ export class RadarRenderer {
         ctx.restore();
       }
 
-      // Labels
+      // Labels (entfallen, sobald die aufgemalte Bezeichnung lesbar ist)
+      if (9 * pxPerM >= 5) continue;
       const labelFontSize = rangeNM <= 12 ? 11 : 9;
       ctx.fillStyle = C.RWY_LABEL;
       ctx.font = `bold ${labelFontSize}px "Courier New"`;
       ctx.textAlign = 'center';
       const labelOffset = Math.max(10, len * 0.1);
-      const ux = dx / len, uy = dy / len;
       // Kennung steht an ihrer eigenen Schwelle (p1), die Gegenrichtung am anderen Ende (p2)
       ctx.fillText(rwy.id,     p1.x + ux * labelOffset, p1.y + uy * labelOffset + 4);
       if (rwy.id !== rwy.recipId) {
         ctx.fillText(rwy.recipId, p2.x - ux * labelOffset, p2.y - uy * labelOffset + 4);
       }
     }
-  }
-
-  private drawThresholdBar(
-    near: { x: number; y: number },
-    far:  { x: number; y: number },
-    widthPx: number
-  ): void {
-    const { ctx } = this;
-    const dx = far.x - near.x, dy = far.y - near.y;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len === 0) return;
-    const nx = -dy / len, ny = dx / len;
-    ctx.strokeStyle = C.RWY_THR;
-    ctx.lineWidth   = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(near.x + nx * widthPx / 2, near.y + ny * widthPx / 2);
-    ctx.lineTo(near.x - nx * widthPx / 2, near.y - ny * widthPx / 2);
-    ctx.stroke();
   }
 
   // ── ILS cones ─────────────────────────────────────────────────────────────

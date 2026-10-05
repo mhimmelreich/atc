@@ -696,7 +696,7 @@ export function App() {
       <div>
         <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
           <span>RANGE</span>
-          <span style={{ color: '#00ff88' }}>{Math.round(gameState.rangeNM)} NM</span>
+          <span style={{ color: '#00ff88' }}>{gameState.rangeNM < 2 ? gameState.rangeNM.toFixed(1) : Math.round(gameState.rangeNM)} NM</span>
         </div>
         <div style={{ display: 'flex', gap: 3 }}>
           {RANGE_PRESETS.map((nm) => (

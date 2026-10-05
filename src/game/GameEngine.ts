@@ -474,7 +474,7 @@ export class GameEngine {
   // LIVE läuft in Echtzeit, sonst laufen eigene und echte Flieger auseinander
   setTimeScale(s: number):    void { this.state = { ...this.state, timeScale: this.liveMode ? 1 : s }; this.trySave(); }
   setSweep(enabled: boolean): void { this.state = { ...this.state, sweepEnabled: enabled };                          this.trySave(); }
-  setRange(nm: number):       void { this.state = { ...this.state, rangeNM: Math.max(2, Math.min(200, nm)) };        this.trySave(); this.saveCameraSoon(); }
+  setRange(nm: number):       void { this.state = { ...this.state, rangeNM: Math.max(0.15, Math.min(200, nm)) };        this.trySave(); this.saveCameraSoon(); }
   setTrailLength(n: number):  void { this.state = { ...this.state, trailLength: n };                                 this.trySave(); }
 
   private trySave(): void {
@@ -521,7 +521,7 @@ export class GameEngine {
       if (!c || c.icao !== icao || ![c.viewLat, c.viewLng, c.rangeNM, c.yaw, c.pitch].every(Number.isFinite)) return;
       this.viewLat = c.viewLat;
       this.viewLng = c.viewLng;
-      this.state = { ...this.state, rangeNM: Math.max(2, Math.min(200, c.rangeNM)) };
+      this.state = { ...this.state, rangeNM: Math.max(0.15, Math.min(200, c.rangeNM)) };
       this.camera = { yaw: c.yaw, pitch: Math.max(PITCH_MIN, Math.min(PITCH_MAX, c.pitch)) };
     } catch { /* kaputter Eintrag: Standard */ }
   }
