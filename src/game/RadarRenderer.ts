@@ -999,22 +999,32 @@ export function drawSpectator(ctx: CanvasRenderingContext2D, p: { x: number; y: 
   ctx.restore();
 }
 
-const TOWN_LINE = 'rgba(150,130,210,0.35)';
-const TOWN_LABEL = 'rgba(175,160,225,0.75)';
+// Orte bewusst blass, damit sie den Verkehr nicht überdecken
+const TOWN_LINE = '150,130,210';
+const TOWN_LINE_ALPHA = 0.2;
+const TOWN_LABEL_ALPHA = 0.45;
 
-/** Ortschaften: Umriss gestrichelt, Name am Ortskern, größere Orte größer beschriftet */
+/**
+ * Ortschaften: Umriss gestrichelt, Name am Ortskern, größere Orte größer beschriftet.
+ * fade (3D): Sichtbarkeit 0..1 je Ort nach Entfernung zur Kamera (aus der Tiefe des Ortskerns).
+ */
 export function drawTowns(
   ctx: CanvasRenderingContext2D,
   towns: import('@/services/TownService').Town[],
-  ll2c: (lat: number, lng: number) => { x: number; y: number } | null,
+  ll2c: (lat: number, lng: number) => { x: number; y: number; depth?: number } | null,
   W: number, H: number,
+  fade?: (depth: number) => number,
 ): void {
   ctx.save();
-  ctx.strokeStyle = TOWN_LINE;
   ctx.lineWidth = 1;
-  ctx.setLineDash([4, 3]);
-  ctx.beginPath();
+  ctx.textAlign = 'center';
   for (const t of towns) {
+    const c = ll2c(t.lat, t.lng);
+    const vis = fade ? (c?.depth !== undefined ? fade(c.depth) : 0) : 1;
+    if (vis <= 0.01) continue;
+    ctx.strokeStyle = `rgba(${TOWN_LINE},${TOWN_LINE_ALPHA * vis})`;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
     for (const ring of t.rings) {
       let pen = false;
       for (const [lat, lng] of ring) {
@@ -1024,16 +1034,12 @@ export function drawTowns(
         pen = true;
       }
     }
-  }
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = TOWN_LABEL;
-  ctx.textAlign = 'center';
-  for (const t of towns) {
-    const p = ll2c(t.lat, t.lng);
-    if (!p || p.x < -50 || p.x > W + 50 || p.y < -20 || p.y > H + 20) continue;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (!c || c.x < -50 || c.x > W + 50 || c.y < -20 || c.y > H + 20) continue;
+    ctx.fillStyle = `rgba(175,160,225,${TOWN_LABEL_ALPHA * vis})`;
     ctx.font = `${t.pop >= 100_000 ? 'bold 11px' : t.pop >= 20_000 ? '10px' : '9px'} "Courier New"`;
-    ctx.fillText(t.name.toUpperCase(), p.x, p.y + 3);
+    ctx.fillText(t.name.toUpperCase(), c.x, c.y + 3);
   }
   ctx.restore();
 }

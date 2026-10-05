@@ -13,6 +13,9 @@ const FT_PER_NM = 6076;
 const FOV_DEG = 50;
 const GLIDE_NM = 15;
 const TRAIL_SAMPLE_MS = 5000;
+// Orte verblassen mit der Entfernung zur Kamera (Vielfache des Abstands Kamera–Blickpunkt)
+const TOWN_FADE_START = 0.4;
+const TOWN_FADE_END = 1.3;
 const TRAIL_MAX = 120;
 const LIVE_LABEL_MAX_FT = 20000;
 
@@ -191,7 +194,12 @@ export class Scene3DRenderer {
 
     this.sampleTrails(o);
     this.drawConflicts(o);
-    if (o.towns?.length) drawTowns(this.ctx, o.towns, (lat, lng) => this.proj(this.world(lat, lng, 0)), this.cssW, this.cssH);
+    if (o.towns?.length) {
+      // Nahe Orte voll (im Rahmen der Grundblässe), ab dem Blickpunkt verblassend, weit hinten unsichtbar
+      const d = Scene3DRenderer.distanceFor(o.rangeNM);
+      const fade = (depth: number) => Math.max(0, Math.min(1, 1 - (depth - d * TOWN_FADE_START) / (d * (TOWN_FADE_END - TOWN_FADE_START))));
+      drawTowns(this.ctx, o.towns, (lat, lng) => this.proj(this.world(lat, lng, 0)), this.cssW, this.cssH, fade);
+    }
     if (o.track && o.live) {
       // Bisherige Flugbahn in ihrer Höhe, mit Loten alle paar Punkte
       const now = o.live.aircraft.find((a) => a.hex === o.track!.hex);
