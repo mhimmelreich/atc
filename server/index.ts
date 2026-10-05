@@ -6,6 +6,7 @@ import trafficRouter from './routes/traffic.js';
 import navdataRouter from './routes/navdata.js';
 import opendataRouter from './routes/opendata.js';
 import townsRouter from './routes/towns.js';
+import landmarksRouter from './routes/landmarks.js';
 import ttsRouter from './routes/tts.js';
 import metarRouter from './routes/metar.js';
 import { startNatPolling } from './nat.js';
@@ -47,6 +48,7 @@ app.use('/api/navdata', navdataRouter);
 app.use('/api/opendata', opendataRouter);
 app.use('/api/metar', metarRouter);
 app.use('/api/towns', townsRouter);
+app.use('/api/landmarks', landmarksRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 

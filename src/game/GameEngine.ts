@@ -12,6 +12,7 @@ import { Scene3DRenderer, DEFAULT_CAMERA, PITCH_MIN, PITCH_MAX, type Camera3D } 
 import { headingDiff } from '@/utils/aviation';
 import { guessStar, type StarGuess } from './StarMatch';
 import type { Town } from '@/services/TownService';
+import type { Landmark } from '@/services/LandmarkService';
 import { pad3 } from './Speech';
 import { destinationPoint, distanceNM } from '@/utils/geo';
 import { SCORE_LANDING, SCORE_GOAROUND, SCORE_SEPARATION_VIOLATION, SCORE_COLLISION } from './constants';
@@ -154,6 +155,7 @@ export class GameEngine {
   private liveFinals = new Map<string, { heading: number; at: number }>(); // hex → Bahnkurs, zuletzt im Endanflug gesehen
   private track: RenderOptions['track'] = null;                            // WATCH: Flugbahn des gewählten Fliegers
   private starGuesses = new Map<string, StarGuess>();
+  private landmarks: Landmark[] = [];                                       // markante Bauwerke rund um den Platz
   private towns: Town[] = [];                                               // WATCH: Ortschaften (schon nach Einwohnern gefiltert)                       // WATCH: hex → wahrscheinliche STAR
   private liveDepartures = new Map<string, number>();
   private liveAirborne = new Set<string>();                                 // hex mit zuletzt ALT > 0
@@ -445,6 +447,7 @@ export class GameEngine {
           live: this.liveMode ? { aircraft: live, trails: this.liveTrails, inbound: roles } : undefined,
           spectator: this.watching ? this.state.spectator : null,
           towns: this.watching ? this.towns : undefined,
+          landmarks: this.state.display.landmarks !== false ? this.landmarks : undefined,
           track: this.watching && this.track && selectedId === liveId(this.track.hex) ? this.track : null,
         };
         if (this.view3D && this.scene3d) this.scene3d.render(opts, this.camera);
@@ -572,6 +575,7 @@ export class GameEngine {
 
   /** WATCH: Ortschaften fürs Radarbild */
   setTowns(towns: Town[]): void { this.towns = towns; }
+  setLandmarks(landmarks: Landmark[]): void { this.landmarks = landmarks; }
 
   /** Blick auf einen Punkt richten (z. B. Suchtreffer) */
   centerOn(lat: number, lng: number): void { this.viewLat = lat; this.viewLng = lng; this.saveCameraSoon(); }

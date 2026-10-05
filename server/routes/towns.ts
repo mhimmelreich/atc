@@ -27,7 +27,7 @@ export interface Town {
   rings: Array<Array<[number, number]>>;
 }
 
-interface OsmMember {
+export interface OsmMember {
   type: 'way' | 'node' | 'relation';
   role: string;
   lat?: number;
@@ -39,7 +39,7 @@ const pending = new Map<string, Promise<string>>();
 const WAIT_MS = 20_000;
 
 /** Wege der Außengrenze zu geschlossenen Ringen zusammensetzen */
-function stitch(ways: Array<Array<[number, number]>>): Array<Array<[number, number]>> {
+export function stitch(ways: Array<Array<[number, number]>>): Array<Array<[number, number]>> {
   const rest = ways.filter((w) => w.length > 1).map((w) => [...w]);
   const rings: Array<Array<[number, number]>> = [];
   const same = (a: [number, number], b: [number, number]) => a[0] === b[0] && a[1] === b[1];
@@ -65,7 +65,7 @@ function stitch(ways: Array<Array<[number, number]>>): Array<Array<[number, numb
 }
 
 /** Douglas-Peucker in Grad (für kurze Strecken genau genug) */
-function simplify(pts: Array<[number, number]>, tol: number): Array<[number, number]> {
+export function simplify(pts: Array<[number, number]>, tol: number): Array<[number, number]> {
   if (pts.length <= 3) return pts;
   const keep = new Uint8Array(pts.length);
   keep[0] = keep[pts.length - 1] = 1;
@@ -87,7 +87,7 @@ function simplify(pts: Array<[number, number]>, tol: number): Array<[number, num
   return pts.filter((_, i) => keep[i]);
 }
 
-interface OsmElement {
+export interface OsmElement {
   type: 'node' | 'way' | 'relation';
   id: number;
   lat?: number;
@@ -96,7 +96,7 @@ interface OsmElement {
   members?: OsmMember[];
 }
 
-async function overpass(query: string): Promise<OsmElement[]> {
+export async function overpass(query: string): Promise<OsmElement[]> {
   // Overpass ist oft ausgelastet (429/504): mit wachsender Pause erneut versuchen
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt < OVERPASS_TRIES; attempt++) {

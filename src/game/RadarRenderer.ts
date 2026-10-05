@@ -70,6 +70,8 @@ export interface DisplayOptions {
   /** Auch Punkte, die nur auf STARs inaktiver Bahnen liegen */
   allNavaids: boolean;
   stars: boolean;
+  /** Markante Bauwerke (Hochhäuser, Türme, große Stadien) */
+  landmarks: boolean;
 }
 
 export const DEFAULT_DISPLAY: DisplayOptions = {
@@ -78,6 +80,7 @@ export const DEFAULT_DISPLAY: DisplayOptions = {
   waypoints: true,
   allNavaids: false,
   stars: true,
+  landmarks: true,
 };
 
 export interface RenderOptions {
@@ -103,6 +106,8 @@ export interface RenderOptions {
   track?: { hex: string; points: Array<{ lat: number; lng: number; altFt: number | null; ts?: number; est?: boolean }> } | null;
   /** WATCH: Ortschaften mit Umriss und Namen */
   towns?: import('@/services/TownService').Town[];
+  /** Markante Bauwerke rund um den Platz */
+  landmarks?: import('@/services/LandmarkService').Landmark[];
   /** WATCH: Standort des Zuschauers (GPS) */
   spectator?: { lat: number; lng: number } | null;
 }
@@ -213,6 +218,7 @@ export class RadarRenderer {
     }
 
     if (opts.towns?.length) drawTowns(ctx, opts.towns, ll2c, W, H);
+    if (opts.landmarks?.length) drawLandmarks2D(ctx, opts.landmarks, ll2c, W, H, opts.rangeNM, opts.display.labels);
     if (opts.spectator) drawSpectator(ctx, ll2c(opts.spectator.lat, opts.spectator.lng));
     if (opts.track && opts.live) {
       // Bisherige Flugbahn bis zur aktuellen Position
@@ -262,10 +268,11 @@ export class RadarRenderer {
     ctx.textAlign = 'left';
     ctx.fillText(`${opts.rangeNM.toFixed(0)} NM`, 8, 18);
 
-    // Quellenhinweis für die Live-Daten (ODbL)
-    if (opts.live) {
+    // Quellenhinweis für Live-Daten und OSM-Daten (ODbL)
+    const credit = sourceCredit(opts);
+    if (credit) {
       ctx.fillStyle = 'rgba(150,170,160,0.6)';
-      ctx.fillText(`Traffic: adsb.lol (ODbL)${opts.towns?.length ? ' · Orte: © OpenStreetMap' : ''}`, 8, H - 8);
+      ctx.fillText(credit, 8, H - 8);
     }
 
     ctx.restore();
@@ -1059,4 +1066,58 @@ export function drawTowns(
     ctx.fillText(t.name.toUpperCase(), c.x, c.y + 3);
   }
   ctx.restore();
+}
+
+export const LANDMARK_RGB = '215,205,170';
+
+/**
+ * Markante Bauwerke im 2D-Radar: dezent gefüllter Grundriss (Punkte als kleines Dreieck),
+ * Name und Höhe nur bei kleinem Ausschnitt, damit das Radarbild ruhig bleibt.
+ */
+export function drawLandmarks2D(
+  ctx: CanvasRenderingContext2D,
+  landmarks: import('@/services/LandmarkService').Landmark[],
+  ll2c: (lat: number, lng: number) => { x: number; y: number },
+  W: number, H: number, rangeNM: number, labels: boolean,
+): void {
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.fillStyle = `rgba(${LANDMARK_RGB},0.14)`;
+  ctx.strokeStyle = `rgba(${LANDMARK_RGB},0.4)`;
+  for (const l of landmarks) {
+    const c = ll2c(l.lat, l.lng);
+    if (c.x < -100 || c.x > W + 100 || c.y < -100 || c.y > H + 100) continue;
+    if (l.rings.length) {
+      ctx.beginPath();
+      for (const ring of l.rings) {
+        ring.forEach(([lat, lng], i) => { const p = ll2c(lat, lng); if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y); });
+        ctx.closePath();
+      }
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y - 4); ctx.lineTo(c.x + 3, c.y + 2); ctx.lineTo(c.x - 3, c.y + 2); ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  // Beschriftung: bis 20 NM die höchsten bzw. Stadien, ab 10 NM alle mit Namen
+  if (labels && rangeNM <= 20) {
+    ctx.font = '9px "Courier New"';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = `rgba(${LANDMARK_RGB},0.6)`;
+    for (const l of landmarks) {
+      if (!l.name || (rangeNM > 10 && l.kind !== 'stadium' && l.heightM < 180)) continue;
+      const c = ll2c(l.lat, l.lng);
+      if (c.x < 0 || c.x > W || c.y < 0 || c.y > H) continue;
+      ctx.fillText(`${l.name.toUpperCase()} ${Math.round((l.heightM * 3.281) / 10) * 10}FT`, c.x + 6, c.y - 4);
+    }
+  }
+  ctx.restore();
+}
+
+/** Quellenhinweis (ODbL) für alles, was gerade zu sehen ist; leer, wenn nichts davon */
+export function sourceCredit(o: RenderOptions): string {
+  const osm = [o.towns?.length ? 'Orte' : '', o.landmarks?.length ? 'Bauwerke' : ''].filter(Boolean).join(', ');
+  return [o.live ? 'Traffic: adsb.lol (ODbL)' : '', osm ? `${osm}: © OpenStreetMap` : ''].filter(Boolean).join(' · ');
 }
