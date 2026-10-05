@@ -34,11 +34,14 @@ export interface Inbound {
   origin?: string;
 }
 
-/** Fliegt der echte Flieger den gewählten Platz an (und ist noch nicht beim Tower)? */
-export function inbound(ac: LiveAircraft, airport: Airport): Inbound | null {
+/**
+ * Fliegt der echte Flieger den gewählten Platz an (und ist noch nicht beim Tower)? withTower: auch
+ * die letzten Meilen beim Tower zählen (WATCH: der Anflug bleibt ein Anflug bis zur Landung).
+ */
+export function inbound(ac: LiveAircraft, airport: Airport, withTower = false): Inbound | null {
   if (ac.ground || ac.altFt === null) return null;
   const dist = distanceNM(ac.lat, ac.lng, airport.lat, airport.lng);
-  if (dist < TAKEOVER_MIN_NM) return null;
+  if (dist < TAKEOVER_MIN_NM && !withTower) return null;
   const vs = ac.vs ?? 0;
   const off = ac.track === null
     ? 180

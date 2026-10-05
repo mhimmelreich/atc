@@ -276,7 +276,7 @@ export class GameEngine {
     const airport = this.airport;
     if (airport) {
       for (const ac of list) {
-        const inb = this.takenOver.has(ac.hex) || this.liveLanded.has(ac.hex) ? null : inbound(ac, airport);
+        const inb = this.takenOver.has(ac.hex) || this.liveLanded.has(ac.hex) ? null : inbound(ac, airport, this.watching);
         if (!inb) continue;
         this.liveInbound.set(ac.hex, inb);
         if (callsIn(ac, inb, airport)) calls.push({ ac, dist: distanceNM(ac.lat, ac.lng, airport.lat, airport.lng) });
