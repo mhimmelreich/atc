@@ -22,8 +22,8 @@ import { loadTelephony } from '@/game/Telephony';
 import { fetchLiveTraffic, fetchTrace, LIVE_POLL_MS } from '@/services/LiveTrafficService';
 import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
 import { fetchTowns, type Town } from '@/services/TownService';
-import type { LiveAircraft, LiveInbound, TrafficMode, WatchFilter } from '@/types/live';
-import { bearingBetween, distanceNM } from '@/utils/geo';
+import type { TrafficMode, WatchFilter } from '@/types/live';
+import { nextLander } from '@/game/NextLander';
 
 const SIDEBAR_W = 288;
 const MOBILE_BREAKPOINT = 700;
@@ -339,12 +339,12 @@ export function App() {
       if (!landed.has(selAc.hex)) { flyingSelRef.current = sel; return; }
       if (flyingSelRef.current !== sel) return;
     }
-    const next = nextLander(gameState.watch, gameState.watchRoles, airport, landed);
+    const next = nextLander(gameState.watch, gameState.watchRoles, airport, landed, gameState.activeRunwayIds);
     const id = next ? `live-${next.hex}` : null;
     if (!id || id === sel) return;
     flyingSelRef.current = id;
     engineRef.current?.selectAircraft(id);
-  }, [watching, airport, watchFilter, gameState.watch, gameState.watchRoles, gameState.watchLanded, gameState.selectedId]);
+  }, [watching, airport, watchFilter, gameState.watch, gameState.watchRoles, gameState.watchLanded, gameState.activeRunwayIds, gameState.selectedId]);
 
   // ── WATCH: Start und Ziel des gewählten Flugs im Klartext oben in der Mitte ──
   const [airportNames, setAirportNames] = useState<Record<string, { name: string; country: string }>>({});
@@ -846,21 +846,4 @@ function DisplayBar({ display, onChange, extra = [] }: { display: DisplayOptions
       ))}
     </div>
   );
-}
-
-/**
- * Anflug, der voraussichtlich als nächster landet: kleinste geschätzte Restflugzeit. Die Strecke
- * wächst mit dem Winkel zwischen Kurs und Richtung zum Platz (Gegenanflug ≈ doppelte Entfernung).
- */
-function nextLander(watch: LiveAircraft[], roles: Record<string, LiveInbound>, airport: Airport, landed: Set<string>): LiveAircraft | null {
-  let best: LiveAircraft | null = null, bestEta = Infinity;
-  for (const ac of watch) {
-    const role = roles[ac.hex];
-    if (!role || role.out || landed.has(ac.hex) || ac.ground || ac.altFt === null || ac.altFt <= 0) continue;
-    const d = distanceNM(ac.lat, ac.lng, airport.lat, airport.lng);
-    const off = ac.track === null ? 0 : ((bearingBetween(ac.lat, ac.lng, airport.lat, airport.lng) - ac.track) * Math.PI) / 180;
-    const eta = (d * (1 + 0.5 * (1 - Math.cos(off)))) / Math.max(ac.gs ?? 0, 120);
-    if (eta < bestEta) { bestEta = eta; best = ac; }
-  }
-  return best;
 }
