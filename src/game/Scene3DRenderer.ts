@@ -133,7 +133,7 @@ export class Scene3DRenderer {
     this.cam = {
       x: target.x - Math.sin(yaw) * Math.cos(pitch) * d,
       y: target.y - Math.cos(yaw) * Math.cos(pitch) * d,
-      z: Math.sin(pitch) * d,
+      z: target.z + Math.sin(pitch) * d,
     };
     this.fwd = norm(sub(target, this.cam));
     this.right = norm(cross(this.fwd, { x: 0, y: 0, z: 1 }));
