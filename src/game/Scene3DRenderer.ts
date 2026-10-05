@@ -200,6 +200,16 @@ export class Scene3DRenderer {
       const fade = (depth: number) => Math.max(0, Math.min(1, 1 - (depth - d * TOWN_FADE_START) / (d * (TOWN_FADE_END - TOWN_FADE_START))));
       drawTowns(this.ctx, o.towns, (lat, lng) => this.proj(this.world(lat, lng, 0)), this.cssW, this.cssH, fade);
     }
+    if (o.dayTracks?.length) {
+      // Tageslinien in ihrer Höhe, dünn und durchscheinend: Anflüge hellblau, Abflüge gelborange
+      this.ctx.lineWidth = 1;
+      for (const dir of ['in', 'out'] as const) {
+        this.ctx.strokeStyle = dir === 'in' ? 'rgba(120,215,255,0.28)' : 'rgba(255,190,90,0.28)';
+        this.ctx.beginPath();
+        for (const f of o.dayTracks) if (f.dir === dir) this.polyline(f.p.map(([lat, lng, alt]) => this.world(lat, lng, alt ?? 0)));
+        this.ctx.stroke();
+      }
+    }
     if (o.landmarks?.length) this.drawLandmarks(o);
     if (o.track && o.live) {
       // Bisherige Flugbahn in ihrer Höhe, mit Loten alle paar Punkte

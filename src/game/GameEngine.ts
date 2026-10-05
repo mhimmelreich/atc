@@ -2,6 +2,7 @@
 import type { Airport, Runway } from '@/types/airport';
 import type { Aircraft, ATCCommand, ConflictPair, TrailPoint } from '@/types/aircraft';
 import type { LiveAircraft, LiveInbound, LiveStatus, TrafficMode, WatchFilter } from '@/types/live';
+import type { DayFlight } from '@/services/LiveTrafficService';
 import type { Waypoint, STAR } from '@/types/navdata';
 import type { RadioMessage } from '@/types/radio';
 import type { Weather } from '@/types/weather';
@@ -447,6 +448,7 @@ export class GameEngine {
           live: this.liveMode ? { aircraft: live, trails: this.liveTrails, inbound: roles } : undefined,
           spectator: this.watching ? this.state.spectator : null,
           towns: this.watching ? this.towns : undefined,
+          dayTracks: this.watching ? this.visibleDayTracks() : undefined,
           landmarks: this.state.display.landmarks !== false ? this.landmarks : undefined,
           track: this.watching && this.track && selectedId === liveId(this.track.hex) ? this.track : null,
         };
@@ -571,6 +573,14 @@ export class GameEngine {
       const guess = guessStar([...near, { lat: ac.lat, lng: ac.lng, ts: ac.ts }], ac.track, this.stars, this.state.activeRunwayIds);
       if (guess) this.starGuesses.set(ac.hex, guess);
     }
+  }
+
+  /** WATCH TAG: Starts und Landungen eines Tages als Linien (null: aus) */
+  private dayTracks: DayFlight[] | null = null;
+  setDayTracks(flights: DayFlight[] | null): void { this.dayTracks = flights; }
+  private visibleDayTracks(): DayFlight[] | undefined {
+    if (!this.dayTracks) return undefined;
+    return this.watchFilter === 'all' ? this.dayTracks : this.dayTracks.filter((f) => f.dir === this.watchFilter);
   }
 
   /** WATCH: Ortschaften fürs Radarbild */

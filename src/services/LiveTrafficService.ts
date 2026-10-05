@@ -23,3 +23,21 @@ export async function fetchTrace(hex: string): Promise<TracePoint[]> {
   const data = await res.json() as { points: Array<[number, number, number | null, number, 1?]> };
   return data.points.map(([lat, lng, altFt, ts, est]) => ({ lat, lng, altFt, ts, ...(est ? { est: true } : {}) }));
 }
+
+/** WATCH TAG: ein aufgezeichneter Start oder eine Landung; Punkte [lat, lng, ALT (null am Boden), s seit t0] */
+export interface DayFlight {
+  hex: string;
+  cs: string;
+  type?: string;
+  dir: 'in' | 'out';
+  other?: string;
+  t0: number;
+  p: Array<[number, number, number | null, number]>;
+}
+
+/** Alle aufgezeichneten Starts und Landungen eines Platzes an einem Tag (YYYY-MM-DD, Ortszeit des Servers) */
+export async function fetchDayTracks(icao: string, date: string): Promise<{ recorded: boolean; flights: DayFlight[] }> {
+  const res = await fetch(`${import.meta.env.BASE_URL}api/daytracks/${icao}?date=${date}`);
+  if (!res.ok) throw new Error(`Tagesspuren: HTTP ${res.status}`);
+  return res.json() as Promise<{ recorded: boolean; flights: DayFlight[] }>;
+}

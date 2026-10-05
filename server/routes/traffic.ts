@@ -65,7 +65,7 @@ export interface LiveAircraftDto {
   age: number;
 }
 
-interface Snapshot {
+export interface Snapshot {
   fetchedAt: number;
   aircraft: Array<Omit<LiveAircraftDto, 'age'> & { seenPos: number }>;
 }
@@ -166,18 +166,15 @@ async function fetchSnapshot(lat: number, lon: number): Promise<Snapshot> {
   return { fetchedAt: Date.now(), aircraft };
 }
 
-// Eigenes Limit vor dem allgemeinen: der Client fragt alle 5 s
-router.use(rateLimit({ windowMs: 60_000, max: 240, standardHeaders: true, legacyHeaders: false }));
-
-router.get('/', async (req, res) => {
-  const lat = Number(req.query.lat);
-  const lon = Number(req.query.lon);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
-    res.status(400).json({ error: 'lat und lon fehlen' });
-    return;
-  }
-  const qLat = Math.round(lat * 100) / 100;
-  const qLon = Math.round(lon * 100) / 100;
+/**
+ * Verkehr um einen Punkt: gemeinsamer Zwischenspeicher für alle Spieler und die Tagesaufzeichnung,
+ * undefined, wenn nichts Brauchbares da ist (Fehler und auch der letzte Stand zu alt)
+ */
+export async function snapshotAt(lat: number, lon: number): Promise<Snapshot | undefined> {
+  // Auf 0,05° (≈ 3 NM) gerundet: Spieler und Tagesaufzeichnung am selben Platz teilen sich eine Abfrage,
+  // auch wenn ihre Platzkoordinaten (Navigraph, OurAirports) leicht abweichen; bei 120 NM Umkreis egal
+  const qLat = Math.round(lat * 20) / 20;
+  const qLon = Math.round(lon * 20) / 20;
   const key = `${qLat},${qLon}`;
   const now = Date.now();
 
@@ -201,11 +198,31 @@ router.get('/', async (req, res) => {
 
   // Nach einem Fehler noch kurz den letzten Stand liefern
   const snapshot = entry.snapshot;
-  if (!snapshot || Date.now() - snapshot.fetchedAt > STALE_MS) {
+  if (!snapshot || Date.now() - snapshot.fetchedAt > STALE_MS) return undefined;
+  lookupRoutes(snapshot.aircraft);
+  return snapshot;
+}
+
+/** Bekannte Flugroute eines Rufzeichens als ICAO-Kette (z. B. "EGLL-EDDF"), sonst undefined */
+export function routeOf(callsign: string): string | undefined {
+  return routes.get(callsign)?.codes ?? undefined;
+}
+
+// Eigenes Limit vor dem allgemeinen: der Client fragt alle 5 s
+router.use(rateLimit({ windowMs: 60_000, max: 240, standardHeaders: true, legacyHeaders: false }));
+
+router.get('/', async (req, res) => {
+  const lat = Number(req.query.lat);
+  const lon = Number(req.query.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    res.status(400).json({ error: 'lat und lon fehlen' });
+    return;
+  }
+  const snapshot = await snapshotAt(lat, lon);
+  if (!snapshot) {
     res.status(503).json({ error: 'Live-Verkehr nicht verfügbar' });
     return;
   }
-  lookupRoutes(snapshot.aircraft);
   const sinceFetch = (Date.now() - snapshot.fetchedAt) / 1000;
   res.setHeader('Cache-Control', 'no-store');
   res.json({

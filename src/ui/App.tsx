@@ -19,7 +19,7 @@ import { StationPanel } from './StationPanel';
 import { WatchPanel } from './WatchPanel';
 import { RadioVoice } from '@/services/RadioVoice';
 import { loadTelephony } from '@/game/Telephony';
-import { fetchLiveTraffic, fetchTrace, LIVE_POLL_MS } from '@/services/LiveTrafficService';
+import { fetchLiveTraffic, fetchTrace, fetchDayTracks, LIVE_POLL_MS } from '@/services/LiveTrafficService';
 import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
 import { fetchTowns, type Town } from '@/services/TownService';
 import { fetchLandmarks } from '@/services/LandmarkService';
@@ -41,6 +41,9 @@ const SOURCE_NAMES: Record<AirportSource, string> = {
 const RADIO_STORAGE = 'atc-radio';
 // WATCH: Ortschaften ab dieser Einwohnerzahl einblenden (0 = aus)
 const TOWNS_STORAGE = 'atc-towns-min';
+const DAY_STORAGE = 'atc-day-tracks';
+/** Heutiges Datum (Ortszeit) als YYYY-MM-DD */
+const today = () => new Date().toLocaleDateString('sv-SE');
 const WATCH_FILTER_STORAGE = 'atc-watch-filter';
 const TOWN_OPTIONS: Array<{ pop: number; label: string }> = [
   { pop: 0, label: 'AUS' }, { pop: 5000, label: '5k' }, { pop: 10000, label: '10k' },
@@ -304,6 +307,35 @@ export function App() {
     engineRef.current?.setTowns(watching && townMin > 0 ? towns.filter((t) => t.pop >= townMin) : []);
   }, [towns, townMin, watching]);
 
+  // ── WATCH TAG: alle Starts und Landungen eines Tages als Linien (Filter IN/OUT/ALLE wie die Liste) ──
+  const [dayOn, setDayOn] = useState(() => { try { return localStorage.getItem(DAY_STORAGE) === '1'; } catch { return false; } });
+  const [dayDate, setDayDate] = useState(today);
+  const [dayStatus, setDayStatus] = useState<string | null>(null);
+  const toggleDay = useCallback(() => {
+    setDayOn((v) => { try { localStorage.setItem(DAY_STORAGE, v ? '0' : '1'); } catch { /* nur Komfort */ } return !v; });
+  }, []);
+  const dayIcao = watching && dayOn && airport ? airport.icao : null;
+  useEffect(() => {
+    engineRef.current?.setDayTracks(null);
+    setDayStatus(null);
+    if (!dayIcao) return;
+    let stopped = false;
+    const load = async () => {
+      try {
+        const { recorded, flights } = await fetchDayTracks(dayIcao, dayDate);
+        if (stopped) return;
+        engineRef.current?.setDayTracks(flights);
+        const nIn = flights.filter((f) => f.dir === 'in').length;
+        setDayStatus(!recorded ? `${dayIcao} wird nicht aufgezeichnet` : `${nIn} Landungen, ${flights.length - nIn} Starts`);
+      } catch {
+        if (!stopped) setDayStatus('Tagesspuren nicht verfügbar');
+      }
+    };
+    void load();
+    // Heute kommen laufend Flüge dazu
+    const id = dayDate === today() ? setInterval(load, 60_000) : undefined;
+    return () => { stopped = true; if (id) clearInterval(id); };
+  }, [dayIcao, dayDate]);
   // ── Markante Bauwerke rund um den Platz (in allen Modi) ──
   const landmarkCenter = airport ? `${(Math.round(airport.lat * 4) / 4).toFixed(2)},${(Math.round(airport.lng * 4) / 4).toFixed(2)}` : null;
   useEffect(() => {
@@ -563,6 +595,29 @@ export function App() {
             ))}
           </div>
           {gpsStatus && <div style={{ color: gpsStatus.startsWith('GPS ±') ? '#7fa88c' : '#ffaa00', fontSize: 10, marginTop: 3 }}>{gpsStatus}</div>}
+        </div>
+      )}
+
+      {/* WATCH TAG: alle Starts und Landungen eines Tages */}
+      {watching && (
+        <div>
+          <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
+            <span title="Alle aufgezeichneten Starts und Landungen des Tages als Linien; Filter IN/OUT/ALLE wie bei der Liste">TAG: STARTS / LANDUNGEN</span>
+            {dayOn && dayStatus && <span style={{ color: dayStatus.includes('nicht') ? '#ffaa00' : '#7fa88c' }}>{dayStatus}</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 3 }}>
+            <button onClick={toggleDay} title="Tageslinien ein- oder ausblenden" style={{
+              flex: '0 0 56px',
+              background: dayOn ? '#0a3020' : 'transparent',
+              border: `1px solid ${dayOn ? '#00cc66' : '#1a4428'}`,
+              color: dayOn ? '#00ff88' : '#446644',
+              fontFamily: '"Courier New", monospace', fontSize: 11, padding: '4px 2px', cursor: 'pointer', borderRadius: 2,
+            }}>{dayOn ? 'AN' : 'AUS'}</button>
+            <input type="date" value={dayDate} max={today()} onChange={(e) => e.target.value && setDayDate(e.target.value)} style={{
+              flex: 1, minWidth: 0, background: '#0a1a0a', border: '1px solid #1a4428', color: '#00ff88', colorScheme: 'dark',
+              fontFamily: '"Courier New", monospace', fontSize: 11, padding: '3px 4px', borderRadius: 2,
+            }} />
+          </div>
         </div>
       )}
 
