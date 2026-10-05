@@ -53,6 +53,8 @@ services:
       - ./data/towns:/app/data/towns
       # Nordatlantik-Tracks (FAA, frei), gesammelt für die Lücke über dem Ozean
       - ./data/nat:/app/data/nat
+      # Tagesaufzeichnung der Starts und Landungen (WATCH TAG), 30 Tage
+      - ./data/daytracks:/app/data/daytracks
     networks:
       - proxy
     depends_on:

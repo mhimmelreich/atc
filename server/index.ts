@@ -9,6 +9,7 @@ import townsRouter from './routes/towns.js';
 import ttsRouter from './routes/tts.js';
 import metarRouter from './routes/metar.js';
 import { startNatPolling } from './nat.js';
+import { startDayTracks, dayTracksRouter } from './dayTracks.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
@@ -47,10 +48,12 @@ app.use('/api/navdata', navdataRouter);
 app.use('/api/opendata', opendataRouter);
 app.use('/api/metar', metarRouter);
 app.use('/api/towns', townsRouter);
+app.use('/api/daytracks', dayTracksRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 startNatPolling();
+startDayTracks();
 
 app.listen(PORT, HOST, () => {
   console.log(`atc-api listening on ${HOST}:${PORT}`);

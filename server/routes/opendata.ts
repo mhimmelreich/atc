@@ -119,6 +119,14 @@ async function loadData(): Promise<OpenData> {
 }
 
 /** Stadt eines Flughafens laut OurAirports, z. B. für den Rufnamen der Anflugkontrolle */
+/** Lage und Höhe eines Platzes (OurAirports) */
+export async function airportPos(icao: string): Promise<{ lat: number; lng: number; elevationFt: number } | undefined> {
+  const a = (await loadData()).airports.get(icao);
+  const lat = Number(a?.latitude_deg), lng = Number(a?.longitude_deg);
+  if (!a || !Number.isFinite(lat) || !Number.isFinite(lng)) return undefined;
+  return { lat, lng, elevationFt: Number(a.elevation_ft) || 0 };
+}
+
 export async function cityOf(icao: string): Promise<string | undefined> {
   const d = await loadData();
   return d.airports.get(icao)?.municipality || undefined;

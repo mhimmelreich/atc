@@ -58,6 +58,8 @@ const C = {
   LIVE_OUTBOUND:    'rgba(255,190,90,0.95)',
   TRACK:            'rgba(255,110,0,0.95)',   // kräftiges Orange, hebt sich von STAR (violett), ILS (blau) und Abflügen (blasses Gelborange) ab
   TRACK_HALO:       'rgba(0,0,0,0.7)',
+  DAY_IN:           'rgba(120,215,255,0.28)',
+  DAY_OUT:          'rgba(255,190,90,0.28)',
 };
 
 // Echte Flieger: Beschriftung nur unterhalb dieser Höhe (darüber Überflieger ohne Bezug zum Platz)
@@ -101,6 +103,8 @@ export interface RenderOptions {
   live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]>; inbound: Map<string, LiveInbound> };
   /** WATCH: vergangene Flugbahn des gewählten Fliegers */
   track?: { hex: string; points: Array<{ lat: number; lng: number; altFt: number | null; ts?: number; est?: boolean }> } | null;
+  /** WATCH TAG: alle Starts und Landungen eines Tages als Linien (schon nach IN/OUT gefiltert) */
+  dayTracks?: import('@/services/LiveTrafficService').DayFlight[];
   /** WATCH: Ortschaften mit Umriss und Namen */
   towns?: import('@/services/TownService').Town[];
   /** WATCH: Standort des Zuschauers (GPS) */
@@ -213,6 +217,19 @@ export class RadarRenderer {
     }
 
     if (opts.towns?.length) drawTowns(ctx, opts.towns, ll2c, W, H);
+    if (opts.dayTracks?.length) {
+      // Tageslinien dünn und durchscheinend: Anflüge hellblau, Abflüge gelborange
+      ctx.lineWidth = 1;
+      for (const dir of ['in', 'out'] as const) {
+        ctx.strokeStyle = dir === 'in' ? C.DAY_IN : C.DAY_OUT;
+        ctx.beginPath();
+        for (const f of opts.dayTracks) {
+          if (f.dir !== dir) continue;
+          f.p.forEach(([lat, lng], i) => { const c = ll2c(lat, lng); if (i === 0) ctx.moveTo(c.x, c.y); else ctx.lineTo(c.x, c.y); });
+        }
+        ctx.stroke();
+      }
+    }
     if (opts.spectator) drawSpectator(ctx, ll2c(opts.spectator.lat, opts.spectator.lng));
     if (opts.track && opts.live) {
       // Bisherige Flugbahn bis zur aktuellen Position
