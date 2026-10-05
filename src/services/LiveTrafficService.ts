@@ -13,12 +13,13 @@ export async function fetchLiveTraffic(lat: number, lng: number): Promise<LiveAi
 }
 
 /** Punkt der vergangenen Flugbahn; altFt null am Boden */
-export interface TracePoint { lat: number; lng: number; altFt: number | null; ts: number }
+/** est: geschätzt (Lücke ohne Empfang, z. B. über dem Atlantik nach NAT-Track) */
+export interface TracePoint { lat: number; lng: number; altFt: number | null; ts: number; est?: boolean }
 
 /** Vergangene Flugbahn des laufenden Flugs (WATCH, Trace-Dateien von adsb.lol) */
 export async function fetchTrace(hex: string): Promise<TracePoint[]> {
   const res = await fetch(`${import.meta.env.BASE_URL}api/traffic/trace/${hex}`);
   if (!res.ok) throw new Error(`Flugbahn: HTTP ${res.status}`);
-  const data = await res.json() as { points: Array<[number, number, number | null, number]> };
-  return data.points.map(([lat, lng, altFt, ts]) => ({ lat, lng, altFt, ts }));
+  const data = await res.json() as { points: Array<[number, number, number | null, number, 1?]> };
+  return data.points.map(([lat, lng, altFt, ts, est]) => ({ lat, lng, altFt, ts, ...(est ? { est: true } : {}) }));
 }

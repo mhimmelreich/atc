@@ -5,6 +5,7 @@
 // Daten aus VRS standing-data, CC0).
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
+import { fillGap, type GapPoint } from '../nat.js';
 
 const router = Router();
 
@@ -224,11 +225,13 @@ const TRACE_URL = 'https://adsb.lol/data/traces';
 const TRACE_TTL_MS = 60_000;
 const TRACE_MAX_POINTS = 800;
 const TRACE_PER_MIN = 30;
-const traces = new Map<string, { at: number; points: TracePoint[] }>();
+const traces = new Map<string, { at: number; points: OutPoint[] }>();
 let traceCalls: number[] = [];
 
 /** [lat, lng, altFt (null am Boden), Zeitpunkt in ms] */
 type TracePoint = [number, number, number | null, number];
+/** wie TracePoint, mit 1 am Ende für geschätzte Punkte (Lücke ohne Empfang, z. B. über dem Atlantik) */
+type OutPoint = TracePoint | GapPoint;
 
 interface TraceFile {
   timestamp: number;
@@ -246,7 +249,7 @@ async function fetchTrace(hex: string, kind: 'full' | 'recent'): Promise<TraceFi
 }
 
 /** Punkte ab dem Beginn des letzten Flugabschnitts (readsb: Flag 2 = neuer Abschnitt) */
-function currentLeg(files: Array<TraceFile | null>): TracePoint[] {
+function currentLeg(files: Array<TraceFile | null>): OutPoint[] {
   const all: Array<{ ts: number; p: TracePoint; newLeg: boolean }> = [];
   for (const f of files) {
     if (!f) continue;
@@ -268,7 +271,10 @@ function currentLeg(files: Array<TraceFile | null>): TracePoint[] {
     const step = leg.length / TRACE_MAX_POINTS;
     leg = Array.from({ length: TRACE_MAX_POINTS }, (_, i) => leg[Math.floor(i * step)]).concat([leg[leg.length - 1]]);
   }
-  return leg;
+  // Große Lücken ohne Empfang (Ozean) über NAT-Tracks bzw. den Großkreis schätzen
+  const out: OutPoint[] = [];
+  leg.forEach((p, i) => { if (i > 0) out.push(...fillGap(leg[i - 1], p)); out.push(p); });
+  return out;
 }
 
 router.get('/trace/:hex', async (req, res) => {

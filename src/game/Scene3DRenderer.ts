@@ -207,9 +207,19 @@ export class Scene3DRenderer {
       const vs = pts.map((p) => this.world(p.lat, p.lng, p.altFt ?? 0));
       this.ctx.strokeStyle = 'rgba(255,120,220,0.8)';
       this.ctx.lineWidth = 1.5;
-      this.ctx.beginPath();
-      this.polyline(vs);
-      this.ctx.stroke();
+      // Gemessen durchgezogen, geschätzt (Ozean ohne Empfang) gestrichelt
+      const tp = o.track.points;
+      const isEst = (i: number) => i < tp.length && tp[i].est === true;
+      for (const est of [false, true]) {
+        this.ctx.setLineDash(est ? [6, 5] : []);
+        this.ctx.beginPath();
+        for (let i = 1; i < vs.length; i++) {
+          if ((isEst(i - 1) || isEst(i)) !== est) continue;
+          this.line(vs[i - 1], vs[i]);
+        }
+        this.ctx.stroke();
+      }
+      this.ctx.setLineDash([]);
       this.ctx.strokeStyle = 'rgba(255,120,220,0.15)';
       this.ctx.lineWidth = 1;
       this.ctx.beginPath();

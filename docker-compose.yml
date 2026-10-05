@@ -51,6 +51,8 @@ services:
       - ./data/opendata:/app/data/opendata
       # Ortschaften aus OpenStreetMap (Overpass, gecacht)
       - ./data/towns:/app/data/towns
+      # Nordatlantik-Tracks (FAA, frei), gesammelt für die Lücke über dem Ozean
+      - ./data/nat:/app/data/nat
     networks:
       - proxy
     depends_on:

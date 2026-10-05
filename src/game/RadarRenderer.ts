@@ -99,7 +99,7 @@ export interface RenderOptions {
   /** Echte Flieger (LIVE), nicht gelotst; inbound: Anflüge zum Platz, die man übernehmen kann (hex → Info) */
   live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]>; inbound: Map<string, LiveInbound> };
   /** WATCH: vergangene Flugbahn des gewählten Fliegers */
-  track?: { hex: string; points: Array<{ lat: number; lng: number; altFt: number | null; ts?: number }> } | null;
+  track?: { hex: string; points: Array<{ lat: number; lng: number; altFt: number | null; ts?: number; est?: boolean }> } | null;
   /** WATCH: Ortschaften mit Umriss und Namen */
   towns?: import('@/services/TownService').Town[];
   /** WATCH: Standort des Zuschauers (GPS) */
@@ -216,12 +216,24 @@ export class RadarRenderer {
     if (opts.track && opts.live) {
       // Bisherige Flugbahn bis zur aktuellen Position
       const now = opts.live.aircraft.find((a) => a.hex === opts.track!.hex);
-      const pts = [...opts.track.points, ...(now ? [now] : [])].map((p) => ll2c(p.lat, p.lng));
+      const raw = [...opts.track.points, ...(now ? [now] : [])];
+      const pts = raw.map((p) => ll2c(p.lat, p.lng));
       ctx.strokeStyle = C.TRACK;
       ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-      ctx.stroke();
+      // Gemessen durchgezogen, geschätzt (Ozean ohne Empfang) gestrichelt
+      const tp = opts.track.points;
+      const isEst = (i: number) => i < tp.length && tp[i].est === true;
+      for (const est of [false, true]) {
+        ctx.setLineDash(est ? [6, 5] : []);
+        ctx.beginPath();
+        for (let i = 1; i < pts.length; i++) {
+          if ((isEst(i - 1) || isEst(i)) !== est) continue;
+          ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+          ctx.lineTo(pts[i].x, pts[i].y);
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
     }
     if (opts.live) this.drawLive(opts.live, ll2c, W, H, opts.trailLength, opts.display.labels, opts.now, opts.selectedId);
 

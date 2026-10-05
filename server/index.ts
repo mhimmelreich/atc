@@ -8,6 +8,7 @@ import opendataRouter from './routes/opendata.js';
 import townsRouter from './routes/towns.js';
 import ttsRouter from './routes/tts.js';
 import metarRouter from './routes/metar.js';
+import { startNatPolling } from './nat.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
@@ -48,6 +49,8 @@ app.use('/api/metar', metarRouter);
 app.use('/api/towns', townsRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
+
+startNatPolling();
 
 app.listen(PORT, HOST, () => {
   console.log(`atc-api listening on ${HOST}:${PORT}`);
