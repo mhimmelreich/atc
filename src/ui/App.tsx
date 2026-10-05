@@ -13,6 +13,7 @@ import { CommandPanel } from './CommandPanel';
 import { AlertBanner } from './AlertBanner';
 import { ScorePanel } from './ScorePanel';
 import { ContextMenu, type ContextMenuState } from './ContextMenu';
+import { WatchMenu, type WatchMenuState } from './WatchMenu';
 import { RadioLog } from './RadioLog';
 import { HowTo } from './HowTo';
 import { StationPanel } from './StationPanel';
@@ -92,7 +93,7 @@ export function App() {
     score: 0, landings: 0, violations: 0,
     aircraft: [], conflicts: [], selectedId: null,
     paused: false, timeScale: 1, sweepEnabled: false, rangeNM: 80, trailLength: 6,
-    pendingCmdTypes: {}, display: { ...DEFAULT_DISPLAY },
+    pendingCmdTypes: {}, display: { ...DEFAULT_DISPLAY }, followId: null,
     activeRunwayIds: [], radio: [],
     trafficMode: 'sim', live: { count: 0, inbound: 0, updatedAt: null, error: false }, liveNames: {},
     weather: null, runwaySource: 'default', watch: [], watchRoles: {}, watchLanded: [], spectator: null,
@@ -153,6 +154,7 @@ export function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BREAKPOINT);
   const [bottomOpen, setBottomOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [watchMenu, setWatchMenu] = useState<WatchMenuState | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const closeHelp = useCallback(() => setShowHelp(false), []);
 
@@ -844,6 +846,7 @@ export function App() {
             selectedId={gameState.selectedId}
             onSelectAircraft={handleSelectAircraft}
             onContextMenu={handleContextMenu}
+            onWatchMenu={(id, x, y) => setWatchMenu({ id, x, y, callsign: gameState.watch.find((a) => `live-${a.hex}` === id)?.callsign ?? id.replace('live-', '') })}
             view3D={view3D}
           />
           {radioPrefs.log && (
@@ -878,6 +881,17 @@ export function App() {
           waypoints={navPoints}
           stars={stars}
         />
+      )}
+
+      {watchMenu && (
+        <WatchMenu menu={watchMenu} following={gameState.followId === watchMenu.id}
+          onFollow={(on) => engineRef.current?.follow(on ? watchMenu.id : null)} onClose={() => setWatchMenu(null)} />
+      )}
+      {gameState.followId && (
+        <button onClick={() => engineRef.current?.follow(null)} title="Folgen beenden"
+          style={{ position: 'fixed', bottom: 64, left: '50%', transform: 'translateX(-50%)', zIndex: 40, background: '#06140c', border: '1px solid #00cc66', color: '#00ff88', fontFamily: '"Courier New", monospace', fontSize: 12, padding: '4px 10px', cursor: 'pointer' }}>
+          KAMERA FOLGT {gameState.watch.find((a) => `live-${a.hex}` === gameState.followId)?.callsign ?? gameState.aircraft.find((a) => a.id === gameState.followId)?.callsign ?? ''} ✕
+        </button>
       )}
 
       {(!isMobile || bottomOpen) && sidebar}

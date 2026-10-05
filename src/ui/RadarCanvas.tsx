@@ -9,6 +9,8 @@ interface Props {
   selectedId: string | null;
   onSelectAircraft: (id: string | null) => void;
   onContextMenu: (aircraft: Aircraft, x: number, y: number) => void;
+  /** WATCH: Rechtsklick auf einen echten Flieger (Menü mit „Kamera folgen“) */
+  onWatchMenu?: (id: string, x: number, y: number) => void;
   /** 3D-Ansicht statt Radar */
   view3D: boolean;
 }
@@ -54,7 +56,7 @@ function hitTestAircraft<T extends Target>(
   return best;
 }
 
-export function RadarCanvas({ engine, aircraft, selectedId, onSelectAircraft, onContextMenu, view3D }: Props) {
+export function RadarCanvas({ engine, aircraft, selectedId, onSelectAircraft, onContextMenu, onWatchMenu, view3D }: Props) {
   const canvasRef   = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -201,6 +203,15 @@ export function RadarCanvas({ engine, aircraft, selectedId, onSelectAircraft, on
       // Nach dem Drehen mit der rechten Taste kein Menü
       if (engine.view3D && dragRef.current.moved > 6) return;
       const { own, live } = hitAt(e.clientX, e.clientY, 28);
+      if (engine.isWatching) {
+        // Zuschauen: nichts übernehmen, nur auswählen und das Zuschauer-Menü öffnen
+        if (live && onWatchMenu) {
+          onSelectAircraft(live.id);
+          engine.selectAircraft(live.id);
+          onWatchMenu(live.id, e.clientX + 16, e.clientY + 16);
+        }
+        return;
+      }
       let hit = own;
       if (!hit && live) {
         // Echter Anflug (LIVE): übernehmen und gleich das Menü öffnen
@@ -226,7 +237,7 @@ export function RadarCanvas({ engine, aircraft, selectedId, onSelectAircraft, on
 
       onContextMenu(hit, mx, my);
     },
-    [engine, hitAt, onContextMenu]
+    [engine, hitAt, onContextMenu, onWatchMenu, onSelectAircraft]
   );
 
   void selectedId;

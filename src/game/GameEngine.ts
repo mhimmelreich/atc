@@ -78,6 +78,8 @@ export interface GameState {
   watchLanded: string[];
   /** WATCH: Standort des Zuschauers per GPS (null: am gewählten Platz) */
   spectator: Spectator | null;
+  /** Kamera folgt diesem Flieger (id), null: frei */
+  followId: string | null;
 }
 
 export interface Spectator { lat: number; lng: number; accuracyM: number }
@@ -85,6 +87,9 @@ export interface Spectator { lat: number; lng: number; accuracyM: number }
 export { type DisplayOptions };
 
 type StateCallback = (state: GameState) => void;
+
+/** Kleinster Ausschnitt (Radius in NM); nah genug, um einem Flieger auf der Bahn zu folgen */
+const MIN_RANGE_NM = 0.03;
 
 export interface SessionData {
   icao: string;
@@ -117,6 +122,7 @@ export class GameEngine {
   camera: Camera3D = { ...DEFAULT_CAMERA };
   airport: Airport | null = null;        // public for hit-test in RadarCanvas
   viewLat = 0;                           // public: view centre (pan target)
+  private viewAltFt = 0;                 // 3D: Blickpunkt in der Höhe des verfolgten Fliegers
   viewLng = 0;
   private currentIcao = '';
   private previewHdg: { aircraftId: string; targetHdg: number; direction?: 'left' | 'right' } | null = null;
@@ -142,6 +148,7 @@ export class GameEngine {
     watchRoles: {},
     watchLanded: [],
     spectator: null,
+    followId: null,
   };
   get rangeNM(): number { return this.state.rangeNM; }
   private onStateChange: StateCallback;
@@ -168,6 +175,7 @@ export class GameEngine {
   /** Echte Flieger auf dem Radar (LIVE zum Lotsen, WATCH nur zum Zuschauen) */
   private get liveMode(): boolean { return this.state.trafficMode !== 'sim'; }
   private get watching(): boolean { return this.state.trafficMode === 'watch'; }
+  get isWatching(): boolean { return this.watching; }
 
   constructor(onStateChange: StateCallback) {
     this.onStateChange = onStateChange;
@@ -356,6 +364,14 @@ export class GameEngine {
     return { airport, stars: this.activeStars(), activeRunwayIds: this.state.activeRunwayIds };
   }
 
+  /** Kamera folgt einem Flieger (Zoom bleibt frei), null beendet das Folgen */
+  follow(id: string | null): void {
+    if (this.state.followId === id) return;
+    this.state = { ...this.state, followId: id };
+    if (!id) this.viewAltFt = 0;
+    this.onStateChange(this.state);
+  }
+
   /** Übernehmbare echte Anflüge (WATCH: alle echten Flieger) an ihrer aktuellen Position (für Klicks aufs Radar) */
   liveTargets(): Array<{ id: string; lat: number; lng: number; altitudeFt: number }> {
     return this.liveFrame
@@ -422,11 +438,20 @@ export class GameEngine {
         live = live.filter((ac) => { const r = roles.get(ac.hex); return !!r && !!r.out === wantOut; });
         this.liveFrame = live;
       }
+      // Kamera folgt: Blickpunkt auf den Flieger (echt oder eigener), weg → Folgen endet
+      let followId = this.state.followId;
+      if (followId) {
+        const real = live.find((ac) => liveId(ac.hex) === followId);
+        const own = real ? null : aircraft.find((ac) => ac.id === followId);
+        const pos = real ? { lat: real.lat, lng: real.lng, alt: real.altFt ?? 0 } : own ? { lat: own.lat, lng: own.lng, alt: own.altitudeFt } : null;
+        if (pos) { this.viewLat = pos.lat; this.viewLng = pos.lng; this.viewAltFt = pos.alt; }
+        else { followId = null; this.viewAltFt = 0; }
+      }
       // WATCH: gewählter Flieger weg (gelandet, außer Reichweite) → Auswahl aufheben
       let selectedId = this.state.selectedId;
       if (this.watching && selectedId && !live.some((ac) => liveId(ac.hex) === selectedId)) selectedId = null;
       this.state = {
-        ...this.state, aircraft, conflicts: this.conflicts, pendingCmdTypes, selectedId,
+        ...this.state, aircraft, conflicts: this.conflicts, pendingCmdTypes, selectedId, followId,
         watch: this.watching ? live : this.state.watch.length ? [] : this.state.watch,
         watchRoles: this.watching ? Object.fromEntries(roles) : this.state.watch.length ? {} : this.state.watchRoles,
         watchLanded: this.watching ? [...this.liveLanded] : [],
@@ -446,6 +471,7 @@ export class GameEngine {
           trailLength: this.state.trailLength,
           viewLat: this.viewLat,
           viewLng: this.viewLng,
+          viewAltFt: this.state.followId ? this.viewAltFt : 0,
           previewHeading: this.previewHdg,
           previewAltitude: this.previewAlt,
           stars: this.activeStars(),
@@ -477,7 +503,7 @@ export class GameEngine {
   // LIVE läuft in Echtzeit, sonst laufen eigene und echte Flieger auseinander
   setTimeScale(s: number):    void { this.state = { ...this.state, timeScale: this.liveMode ? 1 : s }; this.trySave(); }
   setSweep(enabled: boolean): void { this.state = { ...this.state, sweepEnabled: enabled };                          this.trySave(); }
-  setRange(nm: number):       void { this.state = { ...this.state, rangeNM: Math.max(0.15, Math.min(200, nm)) };        this.trySave(); this.saveCameraSoon(); }
+  setRange(nm: number):       void { this.state = { ...this.state, rangeNM: Math.max(MIN_RANGE_NM, Math.min(200, nm)) };        this.trySave(); this.saveCameraSoon(); }
   setTrailLength(n: number):  void { this.state = { ...this.state, trailLength: n };                                 this.trySave(); }
 
   private trySave(): void {
@@ -490,6 +516,7 @@ export class GameEngine {
 
   /** Pan view by NM offsets (dxNM east-positive, dyNM north-positive). */
   pan(dxNM: number, dyNM: number): void {
+    this.follow(null); // Verschieben beendet das Folgen
     const cosLat = Math.cos((this.viewLat * Math.PI) / 180);
     this.viewLat += dyNM / 60;
     this.viewLng -= dxNM / (60 * cosLat);
@@ -524,7 +551,7 @@ export class GameEngine {
       if (!c || c.icao !== icao || ![c.viewLat, c.viewLng, c.rangeNM, c.yaw, c.pitch].every(Number.isFinite)) return;
       this.viewLat = c.viewLat;
       this.viewLng = c.viewLng;
-      this.state = { ...this.state, rangeNM: Math.max(0.15, Math.min(200, c.rangeNM)) };
+      this.state = { ...this.state, rangeNM: Math.max(MIN_RANGE_NM, Math.min(200, c.rangeNM)) };
       this.camera = { yaw: c.yaw, pitch: Math.max(PITCH_MIN, Math.min(PITCH_MAX, c.pitch)) };
     } catch { /* kaputter Eintrag: Standard */ }
   }
@@ -611,7 +638,7 @@ export class GameEngine {
   }
 
   /** Blick auf einen Punkt richten (z. B. Suchtreffer) */
-  centerOn(lat: number, lng: number): void { this.viewLat = lat; this.viewLng = lng; this.saveCameraSoon(); }
+  centerOn(lat: number, lng: number): void { this.follow(null); this.viewLat = lat; this.viewLng = lng; this.saveCameraSoon(); }
 
   /** WATCH: Anzeige auf Anflüge (in) oder Abflüge (out) beschränken */
   setWatchFilter(f: WatchFilter): void { this.watchFilter = f; }

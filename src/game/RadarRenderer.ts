@@ -107,6 +107,8 @@ export interface RenderOptions {
   trailLength: number;
   viewLat: number;
   viewLng: number;
+  /** 3D: Höhe des Blickpunkts (verfolgter Flieger), sonst Boden */
+  viewAltFt?: number;
   previewHeading?: { aircraftId: string; targetHdg: number; direction?: 'left' | 'right' } | null;
   previewAltitude?: { aircraftId: string; targetAlt: number } | null;
   stars: STAR[];

@@ -125,7 +125,7 @@ export class Scene3DRenderer {
     this.lng0 = ap.lng;
     this.cosLat0 = Math.cos(toRad(ap.lat));
     this.elev0 = ap.elevationFt ?? 0;
-    const target = this.world(o.viewLat, o.viewLng, 0);
+    const target = this.world(o.viewLat, o.viewLng, o.viewAltFt ?? 0);
     const d = Scene3DRenderer.distanceFor(o.rangeNM);
     const yaw = toRad(cam.yaw);
     const pitch = toRad(cam.pitch);
@@ -705,7 +705,9 @@ export class Scene3DRenderer {
     if (c.z < this.near) return;
     const shape = modelShape(type);
     // Fester Bildmaßstab je Meter, damit die Typen zueinander in echter Größe stehen
-    const spanPx = Math.max(MODEL_MIN_SPAN_PX, shape.span * MODEL_PX_PER_M) * (selected ? 1.15 : 1);
+    // Ganz nah dran echte Größe, sobald sie die feste Bildgröße übersteigt (passt dann zu Bahn und Gebäuden)
+    const truePx = (shape.span * this.focal) / (c.z * 1852);
+    const spanPx = Math.max(truePx, Math.max(MODEL_MIN_SPAN_PX, shape.span * MODEL_PX_PER_M) * (selected ? 1.15 : 1));
     const scale = (spanPx * (c.z / this.focal)) / shape.span; // NM je Modellmeter
     const h = toRad(headingDeg);
     // Fluglage wie echt, nicht der Bahnwinkel: im Sinkflug/Anflug Nase leicht hoch (~2,5°), im Steigflug
