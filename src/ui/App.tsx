@@ -327,18 +327,22 @@ export function App() {
   }, [traceHex]);
 
   // ── WATCH: ohne gewählten Flug automatisch den voraussichtlich nächsten Lander wählen ──
-  // Nach dessen Landung (ALT von über 0 auf 0) oder wenn er verschwindet, kommt der nächste dran. Eine eigene Wahl bleibt.
-  const autoSelRef = useRef<string | null>(null);
+  // Landet der gewählte Flug (ALT von über 0 auf 0, egal ob selbst oder automatisch gewählt) oder
+  // verschwindet er, kommt der nächste dran. Ein schon gelandeter Flug darf bewusst gewählt bleiben.
+  const flyingSelRef = useRef<string | null>(null); // gewählter Flug, der seit der Wahl in der Luft gesehen wurde
   useEffect(() => {
     if (!watching || !airport || watchFilter === 'out') return;
     const sel = gameState.selectedId;
     const selAc = sel ? gameState.watch.find((a) => `live-${a.hex}` === sel) : undefined;
     const landed = new Set(gameState.watchLanded);
-    if (selAc && !(sel === autoSelRef.current && landed.has(selAc.hex))) return;
+    if (selAc) {
+      if (!landed.has(selAc.hex)) { flyingSelRef.current = sel; return; }
+      if (flyingSelRef.current !== sel) return;
+    }
     const next = nextLander(gameState.watch, gameState.watchRoles, airport, landed);
     const id = next ? `live-${next.hex}` : null;
     if (!id || id === sel) return;
-    autoSelRef.current = id;
+    flyingSelRef.current = id;
     engineRef.current?.selectAircraft(id);
   }, [watching, airport, watchFilter, gameState.watch, gameState.watchRoles, gameState.watchLanded, gameState.selectedId]);
 
