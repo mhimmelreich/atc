@@ -3,7 +3,7 @@ import type { Aircraft } from '@/types/aircraft';
 import type { AirportLayer, OsmWay, Runway } from '@/types/airport';
 import { buildingHeightM } from '@/types/airport';
 import type { STAR, Waypoint } from '@/types/navdata';
-import { drawSpectator, drawTowns, LANDMARK_RGB, sourceCredit, type RenderOptions } from './RadarRenderer';
+import { drawRoads, drawSpectator, drawTowns, LANDMARK_RGB, sourceCredit, type RenderOptions } from './RadarRenderer';
 import { toRad } from '@/utils/geo';
 import { typeData } from './constants';
 import { drawRunwayMarkings } from './runwayMarkings';
@@ -228,6 +228,11 @@ export class Scene3DRenderer {
         for (const f of o.dayTracks) if (f.dir === dir) this.polyline(f.p.map(([lat, lng, alt]) => this.world(lat, lng, alt ?? 0)));
         this.ctx.stroke();
       }
+    }
+    if (o.roads?.length) {
+      // Autobahnen am Boden; weit hinten ausgeblendet, damit der Horizont ruhig bleibt
+      const dMax = Scene3DRenderer.distanceFor(o.rangeNM) * 3;
+      drawRoads(this.ctx, o.roads, (lat, lng) => { const p = this.proj(this.world(lat, lng)); return p && p.depth < dMax ? p : null; }, this.cssW, this.cssH, o.rangeNM, o.display.labels);
     }
     if (o.landmarks?.length) this.drawLandmarks(o);
     if (o.track && o.live) {

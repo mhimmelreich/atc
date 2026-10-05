@@ -23,6 +23,7 @@ import { fetchLiveTraffic, fetchTrace, fetchDayTracks, LIVE_POLL_MS } from '@/se
 import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
 import { fetchTowns, type Town } from '@/services/TownService';
 import { fetchLandmarks } from '@/services/LandmarkService';
+import { fetchRoads } from '@/services/RoadService';
 import type { TrafficMode, WatchFilter } from '@/types/live';
 import { nextLander } from '@/game/NextLander';
 
@@ -357,6 +358,17 @@ export function App() {
     fetchLandmarks(lat, lng, () => stopped)
       .then((list) => { if (!stopped) engineRef.current?.setLandmarks(list); })
       .catch(() => { /* ohne Bauwerke geht es auch */ });
+    return () => { stopped = true; };
+  }, [landmarkCenter]);
+  // ── Autobahnen als Orientierungslinien (in allen Modi) ──
+  useEffect(() => {
+    engineRef.current?.setRoads([]);
+    if (!landmarkCenter) return;
+    let stopped = false;
+    const [lat, lng] = landmarkCenter.split(',').map(Number);
+    fetchRoads(lat, lng, () => stopped)
+      .then((list) => { if (!stopped) engineRef.current?.setRoads(list); })
+      .catch(() => { /* ohne Autobahnen geht es auch */ });
     return () => { stopped = true; };
   }, [landmarkCenter]);
 
@@ -889,6 +901,7 @@ const DISPLAY_TOGGLES: { key: keyof DisplayOptions; label: string; title?: strin
   { key: 'allNavaids', label: 'NAV ALL', title: 'Auch Wegpunkte der STARs inaktiver Bahnen zeigen' },
   { key: 'stars',    label: 'STARs'   },
   { key: 'landmarks', label: 'BLDG', title: 'Markante Bauwerke: Hochhäuser, Türme und große Stadien (OpenStreetMap)' },
+  { key: 'roads', label: 'ROADS', title: 'Autobahnen als Orientierung (OpenStreetMap)' },
 ];
 
 interface ExtraToggle {

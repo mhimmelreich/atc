@@ -59,6 +59,8 @@ services:
       - ./data/daytracks:/app/data/daytracks
       # Flughafengelände aus OpenStreetMap (Terminals, Vorfeld, Tower …, Overpass, gecacht)
       - ./data/airport:/app/data/airport
+      # Autobahnen aus OpenStreetMap (Overpass, gecacht)
+      - ./data/roads:/app/data/roads
     networks:
       - proxy
     depends_on:

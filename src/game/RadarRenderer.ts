@@ -4,6 +4,7 @@ import type { LiveAircraft, LiveInbound } from '@/types/live';
 import { typeData } from './constants';
 import { aircraftSilhouette } from './aircraftSymbol';
 import { drawRunwayMarkings } from './runwayMarkings';
+import { roadLabel } from '@/services/RoadService';
 import type { Airport, AirportLayer, OsmWay } from '@/types/airport';
 import type { Waypoint, STAR } from '@/types/navdata';
 import { destinationPoint, toRad } from '@/utils/geo';
@@ -80,6 +81,8 @@ export interface DisplayOptions {
   stars: boolean;
   /** Markante Bauwerke (Hochhäuser, Türme, große Stadien) */
   landmarks: boolean;
+  /** Autobahnen als Orientierungslinien */
+  roads: boolean;
 }
 
 export const DEFAULT_DISPLAY: DisplayOptions = {
@@ -89,6 +92,7 @@ export const DEFAULT_DISPLAY: DisplayOptions = {
   allNavaids: false,
   stars: true,
   landmarks: true,
+  roads: true,
 };
 
 export interface RenderOptions {
@@ -118,6 +122,7 @@ export interface RenderOptions {
   towns?: import('@/services/TownService').Town[];
   /** Markante Bauwerke rund um den Platz */
   landmarks?: import('@/services/LandmarkService').Landmark[];
+  roads?: import('@/services/RoadService').Road[];
   /** WATCH: Standort des Zuschauers (GPS) */
   spectator?: { lat: number; lng: number } | null;
 }
@@ -242,6 +247,7 @@ export class RadarRenderer {
         ctx.stroke();
       }
     }
+    if (opts.roads?.length) drawRoads(ctx, opts.roads, ll2c, W, H, opts.rangeNM, opts.display.labels);
     if (opts.landmarks?.length) drawLandmarks2D(ctx, opts.landmarks, ll2c, W, H, opts.rangeNM, opts.display.labels);
     if (opts.spectator) drawSpectator(ctx, ll2c(opts.spectator.lat, opts.spectator.lng));
     if (opts.track && opts.live) {
@@ -1105,6 +1111,63 @@ export function drawTowns(
 }
 
 export const LANDMARK_RGB = '215,205,170';
+export const ROAD_RGB = '205,150,95';
+
+/**
+ * Autobahnen als dezente Linien mit Nummernschild (blau wie in Deutschland), für 2D und 3D: ll2c bildet
+ * auf den Bildschirm ab (null hinter der Kamera). Schilder in festem Bildabstand entlang der Linie.
+ */
+export function drawRoads(
+  ctx: CanvasRenderingContext2D,
+  roads: import('@/services/RoadService').Road[],
+  ll2c: (lat: number, lng: number) => { x: number; y: number } | null,
+  W: number, H: number, rangeNM: number, labels: boolean,
+): void {
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = rangeNM <= 10 ? 2 : 1.2;
+  ctx.strokeStyle = `rgba(${ROAD_RGB},${rangeNM <= 10 ? 0.45 : 0.32})`;
+  const signs: Array<{ x: number; y: number; t: string }> = [];
+  const SIGN_EVERY_PX = 260;
+  for (const r of roads) {
+    const t = roadLabel(r.ref);
+    for (const line of r.lines) {
+      ctx.beginPath();
+      let pen = false, prev: { x: number; y: number } | null = null, run = SIGN_EVERY_PX / 2;
+      for (const [lat, lng] of line) {
+        const p = ll2c(lat, lng);
+        if (!p) { pen = false; prev = null; continue; }
+        if (pen) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+        pen = true;
+        if (prev && t) {
+          run += Math.hypot(p.x - prev.x, p.y - prev.y);
+          if (run >= SIGN_EVERY_PX && p.x > 20 && p.x < W - 20 && p.y > 20 && p.y < H - 20) { signs.push({ x: p.x, y: p.y, t }); run = 0; }
+        }
+        prev = p;
+      }
+      ctx.stroke();
+    }
+  }
+  if (labels && rangeNM <= 60) {
+    ctx.font = 'bold 9px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const placed: Array<{ x: number; y: number }> = [];
+    for (const s of signs) {
+      if (placed.some((q) => Math.abs(q.x - s.x) < 40 && Math.abs(q.y - s.y) < 16)) continue;
+      placed.push(s);
+      const w = ctx.measureText(s.t).width + 6;
+      ctx.fillStyle = 'rgba(20,60,150,0.8)';
+      ctx.fillRect(s.x - w / 2, s.y - 6, w, 12);
+      ctx.strokeStyle = 'rgba(230,230,230,0.7)';
+      ctx.lineWidth = 0.8;
+      ctx.strokeRect(s.x - w / 2, s.y - 6, w, 12);
+      ctx.fillStyle = 'rgba(240,240,240,0.9)';
+      ctx.fillText(s.t, s.x, s.y + 0.5);
+    }
+  }
+  ctx.restore();
+}
 
 /**
  * Markante Bauwerke im 2D-Radar: dezent gefüllter Grundriss (Punkte als kleines Dreieck),
@@ -1154,6 +1217,6 @@ export function drawLandmarks2D(
 
 /** Quellenhinweis (ODbL) für alles, was gerade zu sehen ist; leer, wenn nichts davon */
 export function sourceCredit(o: RenderOptions): string {
-  const osm = [o.towns?.length ? 'Orte' : '', o.landmarks?.length ? 'Bauwerke' : ''].filter(Boolean).join(', ');
+  const osm = [o.towns?.length ? 'Orte' : '', o.landmarks?.length ? 'Bauwerke' : '', o.roads?.length ? 'Autobahnen' : ''].filter(Boolean).join(', ');
   return [o.live ? 'Traffic: adsb.lol (ODbL)' : '', osm ? `${osm}: © OpenStreetMap` : ''].filter(Boolean).join(' · ');
 }
