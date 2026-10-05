@@ -57,6 +57,8 @@ services:
       - ./data/nat:/app/data/nat
       # Tagesaufzeichnung der Starts und Landungen (WATCH TAG), 30 Tage
       - ./data/daytracks:/app/data/daytracks
+      # Flughafengelände aus OpenStreetMap (Terminals, Vorfeld, Tower …, Overpass, gecacht)
+      - ./data/airport:/app/data/airport
     networks:
       - proxy
     depends_on:

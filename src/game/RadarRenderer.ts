@@ -32,6 +32,11 @@ const C = {
   TERMINAL:         '#091509',
   TERMINAL_BORDER:  'rgba(35,70,25,0.9)',
   TERMINAL_LABEL:   'rgba(60,110,50,0.8)',
+  AD_BOUNDARY:      'rgba(70,120,70,0.45)',
+  HANGAR:           '#0b170d',
+  HANGAR_BORDER:    'rgba(45,85,35,0.8)',
+  TOWER:            'rgba(120,200,120,0.9)',
+  GATE:             'rgba(90,150,90,0.75)',
 
   ILS_CONE:         'rgba(68,136,255,0.40)',
   ILS_CTR:          'rgba(68,136,255,0.20)',
@@ -186,6 +191,7 @@ export class RadarRenderer {
       if (opts.rangeNM <= 18) this.drawPolygons(opts.airport.layer.terminals, ll2c, C.TERMINAL, C.TERMINAL_BORDER, 1);
       if (opts.rangeNM <= 20) this.drawTaxiways(opts.airport.layer, ll2c, scale, opts.rangeNM);
       if (opts.rangeNM <= 18) this.drawTerminalLabels(opts.airport.layer, ll2c);
+      this.drawAirportExtras(opts.airport.layer, ll2c, opts.rangeNM);
     }
 
     this.drawRunways(opts.airport, ll2c, scale, opts.rangeNM);
@@ -445,6 +451,49 @@ export class RadarRenderer {
       ctx.strokeStyle = strokeColor;
       ctx.lineWidth = lineWidth;
       ctx.stroke();
+    }
+  }
+
+  /** Platzgrenze, Hangars, Tower und Gates (OSM) */
+  private drawAirportExtras(
+    layer: AirportLayer,
+    ll2c: (lat: number, lng: number) => { x: number; y: number },
+    rangeNM: number
+  ): void {
+    const { ctx } = this;
+    if (rangeNM <= 40 && layer.boundary?.length) {
+      ctx.save();
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = C.AD_BOUNDARY;
+      ctx.lineWidth = 1;
+      for (const w of layer.boundary) {
+        ctx.beginPath();
+        w.geometry.forEach((p, i) => { const q = ll2c(p.lat, p.lng); if (i === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y); });
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (rangeNM <= 18 && layer.hangars) this.drawPolygons(layer.hangars, ll2c, C.HANGAR, C.HANGAR_BORDER, 0.8);
+    if (rangeNM <= 25) {
+      for (const t of layer.towers ?? []) {
+        if (t.footprint && rangeNM <= 4) this.drawPolygons([t.footprint], ll2c, C.TOWER, C.TOWER, 1);
+        const p = ll2c(t.lat, t.lng);
+        ctx.fillStyle = C.TOWER;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        if (rangeNM <= 12) {
+          ctx.font = '9px "Courier New"';
+          ctx.textAlign = 'left';
+          ctx.fillText(t.label, p.x + 5, p.y + 3);
+        }
+      }
+    }
+    if (rangeNM <= 2 && layer.gates) {
+      ctx.fillStyle = C.GATE;
+      ctx.font = '8px "Courier New"';
+      ctx.textAlign = 'center';
+      for (const g of layer.gates) { const p = ll2c(g.lat, g.lng); ctx.fillText(g.ref, p.x, p.y + 3); }
     }
   }
 

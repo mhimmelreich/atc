@@ -1,5 +1,5 @@
 // filepath: src/game/GameEngine.ts
-import type { Airport, Runway } from '@/types/airport';
+import type { Airport, AirportLayer, Runway } from '@/types/airport';
 import type { Aircraft, ATCCommand, ConflictPair, TrailPoint } from '@/types/aircraft';
 import type { LiveAircraft, LiveInbound, LiveStatus, TrafficMode, WatchFilter } from '@/types/live';
 import type { DayFlight } from '@/services/LiveTrafficService';
@@ -601,6 +601,10 @@ export class GameEngine {
   /** WATCH: Ortschaften fürs Radarbild */
   setTowns(towns: Town[]): void { this.towns = towns; }
   setLandmarks(landmarks: Landmark[]): void { this.landmarks = landmarks; }
+  /** OSM-Gelände (Terminals, Vorfeld …) kommt nach dem Platz */
+  setAirportLayer(icao: string, layer: AirportLayer): void {
+    if (this.airport?.icao === icao) this.airport = { ...this.airport, layer };
+  }
 
   /** Blick auf einen Punkt richten (z. B. Suchtreffer) */
   centerOn(lat: number, lng: number): void { this.viewLat = lat; this.viewLng = lng; this.saveCameraSoon(); }

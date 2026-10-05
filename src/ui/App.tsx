@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { GameEngine, type GameState, type SessionData, type DisplayOptions, type RunwaySource } from '@/game/GameEngine';
 import { DEFAULT_DISPLAY } from '@/game/RadarRenderer';
-import { fetchAirportData, AVAILABLE_AIRPORTS, type AirportSource, type SourcePreference } from '@/services/AirportDataService';
+import { fetchAirportData, fetchAirportLayer, AVAILABLE_AIRPORTS, type AirportSource, type SourcePreference } from '@/services/AirportDataService';
 import { fetchNavStatus } from '@/services/NavigraphService';
 import type { Airport } from '@/types/airport';
 import type { STAR, Waypoint } from '@/types/navdata';
@@ -336,6 +336,17 @@ export function App() {
     const id = dayDate === today() ? setInterval(load, 60_000) : undefined;
     return () => { stopped = true; if (id) clearInterval(id); };
   }, [dayIcao, dayDate]);
+  // ── Flughafengelände aus OSM (Terminals, Vorfeld, Tower …), lädt nach dem Platz ──
+  useEffect(() => {
+    const layerIcao = airport?.icao;
+    if (!layerIcao) return;
+    let stopped = false;
+    fetchAirportLayer(layerIcao, () => stopped)
+      .then((layer) => { if (!stopped && layer) engineRef.current?.setAirportLayer(layerIcao, layer); })
+      .catch(() => { /* ohne Gelände geht es auch */ });
+    return () => { stopped = true; };
+  }, [airport]); // auch nach Quellenwechsel desselben Platzes neu setzen
+
   // ── Markante Bauwerke rund um den Platz (in allen Modi) ──
   const landmarkCenter = airport ? `${(Math.round(airport.lat * 4) / 4).toFixed(2)},${(Math.round(airport.lng * 4) / 4).toFixed(2)}` : null;
   useEffect(() => {

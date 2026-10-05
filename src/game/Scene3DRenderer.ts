@@ -1,6 +1,7 @@
 // filepath: src/game/Scene3DRenderer.ts
 import type { Aircraft } from '@/types/aircraft';
-import type { Runway } from '@/types/airport';
+import type { AirportLayer, OsmWay, Runway } from '@/types/airport';
+import { buildingHeightM } from '@/types/airport';
 import type { STAR, Waypoint } from '@/types/navdata';
 import { drawSpectator, drawTowns, LANDMARK_RGB, sourceCredit, type RenderOptions } from './RadarRenderer';
 import { toRad } from '@/utils/geo';
@@ -41,6 +42,13 @@ const COL = {
   RING_LABEL: 'rgba(0,255,136,0.35)',
   RWY: '#c8c8c8',
   RWY_SURFACE: '#596066',
+  AD_BOUNDARY: 'rgba(90,150,90,0.4)',
+  APRON: 'rgba(70,82,80,0.55)',
+  TAXIWAY: 'rgba(78,90,88,0.9)',
+  TAXI_CL: 'rgba(230,200,60,0.85)',
+  TERMINAL: '150,175,190',
+  HANGAR: '135,150,140',
+  TOWER: '190,220,200',
   RWY_LABEL: '#aaaaaa',
   GLIDE: 'rgba(68,136,255,0.75)',
   GLIDE_GROUND: 'rgba(68,136,255,0.25)',
@@ -191,7 +199,10 @@ export class Scene3DRenderer {
     ctx.fillRect(0, 0, W, H);
 
     this.drawGround(o);
+    const layer = o.rangeNM <= 20 ? o.airport.layer : undefined;
+    if (layer) this.drawAirportGround(layer);
     this.drawRunways(o.airport.runways, o.display.labels);
+    if (layer) this.drawAirportBuildings(layer, o.airport.elevationFt ?? 0, o.display.labels);
     if (o.display.ilsCones) {
       for (const r of o.airport.runways) {
         if (r.ils && r.role !== 'departure' && o.activeRunwayIds.includes(r.id)) this.drawGlidePath(r);
@@ -256,6 +267,104 @@ export class Scene3DRenderer {
     }
     this.drawTargets(o);
     this.drawHud(o, cam);
+    ctx.restore();
+  }
+
+  // ── Flughafengelände (OSM): Platzgrenze, Vorfeld, Rollwege am Boden ──
+  private drawAirportGround(layer: AirportLayer): void {
+    const { ctx } = this;
+    const ring = (w: OsmWay) => {
+      const pts = w.geometry.map((g) => this.proj(this.world(g.lat, g.lng)));
+      if (pts.some((p) => !p)) return false;
+      pts.forEach((p, i) => (i ? ctx.lineTo(p!.x, p!.y) : ctx.moveTo(p!.x, p!.y)));
+      return true;
+    };
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = COL.AD_BOUNDARY;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const w of layer.boundary ?? []) ring(w);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = COL.APRON;
+    ctx.beginPath();
+    for (const w of layer.aprons) if (ring(w)) ctx.closePath();
+    ctx.fill();
+    // Rollwege in echter Breite (OSM width, sonst 23 m), ab genug Platz mit gelber Mittellinie
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    for (const w of layer.taxiways) {
+      const mid = w.geometry[Math.floor(w.geometry.length / 2)];
+      const z = this.camSpace(this.world(mid.lat, mid.lng)).z;
+      if (z < this.near) continue;
+      const pxPerM = this.focal / z / 1852;
+      const widthM = parseFloat(w.tags.width ?? '') || (w.tags.aeroway === 'taxilane' ? 15 : 23);
+      ctx.strokeStyle = COL.TAXIWAY;
+      ctx.lineWidth = Math.max(1, widthM * pxPerM);
+      ctx.beginPath();
+      ring(w);
+      ctx.stroke();
+      if (widthM * pxPerM >= 6) {
+        ctx.strokeStyle = COL.TAXI_CL;
+        ctx.lineWidth = Math.max(0.8, 0.3 * pxPerM);
+        ctx.beginPath();
+        ring(w);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  /** Terminals, Hangars und Tower als Körper in echter Höhe (wie die Bauwerke überhöht) */
+  private drawAirportBuildings(layer: AirportLayer, elevFt: number, labels: boolean): void {
+    const { ctx } = this;
+    type Item = { z: number; ring: Array<{ lat: number; lng: number }>; topFt: number; rgb: string; label?: string; lat: number; lng: number };
+    const items: Item[] = [];
+    const add = (w: OsmWay, fallbackM: number, rgb: string, label?: string) => {
+      const g = w.geometry;
+      const lat = g.reduce((s, p) => s + p.lat, 0) / g.length, lng = g.reduce((s, p) => s + p.lng, 0) / g.length;
+      const z = this.camSpace(this.world(lat, lng)).z;
+      if (z > this.near) items.push({ z, ring: g, topFt: elevFt + buildingHeightM(w.tags, fallbackM) * 3.281, rgb, label, lat, lng });
+    };
+    for (const w of layer.terminals) add(w, 20, COL.TERMINAL, w.tags.name ?? w.tags.ref);
+    for (const w of layer.hangars ?? []) add(w, 18, COL.HANGAR);
+    for (const t of layer.towers ?? []) {
+      // Ohne kartierten Grundriss ein Schaft von etwa 12 m Durchmesser
+      const r = 6 / 111_320, k = Math.cos(toRad(t.lat));
+      const ring = t.footprint?.geometry ?? Array.from({ length: 9 }, (_, i) => ({ lat: t.lat + r * Math.cos((i / 8) * Math.PI * 2), lng: t.lng + (r / k) * Math.sin((i / 8) * Math.PI * 2) }));
+      const z = this.camSpace(this.world(t.lat, t.lng)).z;
+      if (z > this.near) items.push({ z, ring, topFt: elevFt + t.heightM * 3.281, rgb: COL.TOWER, label: t.label, lat: t.lat, lng: t.lng });
+    }
+    items.sort((a, b) => b.z - a.z);
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.font = '9px "Courier New"';
+    ctx.textAlign = 'center';
+    for (const it of items) {
+      const B = it.ring.map((g) => this.proj(this.world(g.lat, g.lng)));
+      const T = it.ring.map((g) => this.proj(this.world(g.lat, g.lng, it.topFt)));
+      if (B.some((p) => !p) || T.some((p) => !p)) continue;
+      const b = B as Pt[], t = T as Pt[];
+      ctx.fillStyle = `rgba(${it.rgb},0.28)`;
+      ctx.strokeStyle = `rgba(${it.rgb},0.8)`;
+      for (let i = 1; i < b.length; i++) {
+        ctx.beginPath();
+        ctx.moveTo(b[i - 1].x, b[i - 1].y); ctx.lineTo(b[i].x, b[i].y); ctx.lineTo(t[i].x, t[i].y); ctx.lineTo(t[i - 1].x, t[i - 1].y);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillStyle = `rgba(${it.rgb},0.45)`;
+      ctx.beginPath();
+      t.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      if (labels && it.label) {
+        const p = this.proj(this.world(it.lat, it.lng, it.topFt));
+        if (p) { ctx.fillStyle = `rgba(${it.rgb},0.9)`; ctx.fillText(it.label, p.x, p.y - 4); }
+      }
+    }
     ctx.restore();
   }
 
@@ -584,7 +693,9 @@ export class Scene3DRenderer {
     const spanPx = Math.max(MODEL_MIN_SPAN_PX, shape.span * MODEL_PX_PER_M) * (selected ? 1.15 : 1);
     const scale = (spanPx * (c.z / this.focal)) / shape.span; // NM je Modellmeter
     const h = toRad(headingDeg);
-    const pitch = Math.max(-0.4, Math.min(0.4, Math.atan2((vsFpm / 60) * this.altScale, Math.max(gsKts, 100) * 1.688)));
+    // Fluglage wie echt, nicht der Bahnwinkel: im Sinkflug/Anflug Nase leicht hoch (~2,5°), im Steigflug
+    // je nach Steigrate bis ~15°, im Reiseflug fast waagerecht, am Boden (langsam) waagerecht
+    const pitch = gsKts < 80 ? 0 : toRad(vsFpm < -300 ? 2.5 : vsFpm > 300 ? Math.min(15, 4 + (vsFpm / 3000) * 11) : 1.5);
     const f0 = { x: Math.sin(h), y: Math.cos(h), z: 0 };
     const fwd = { x: f0.x * Math.cos(pitch), y: f0.y * Math.cos(pitch), z: Math.sin(pitch) };
     const up = { x: -f0.x * Math.sin(pitch), y: -f0.y * Math.sin(pitch), z: Math.cos(pitch) };

@@ -39,6 +39,21 @@ export interface AirportLayer {
   aprons: OsmWay[];
   terminals: OsmWay[];
   holdingPoints: Array<{ lat: number; lng: number; name?: string }>;
+  /** Platzgrenze (Außenringe des Flugplatzes) */
+  boundary?: OsmWay[];
+  hangars?: OsmWay[];
+  /** Kontrollturm: Grundriss (falls kartiert) und Höhe in m */
+  towers?: Array<{ lat: number; lng: number; heightM: number; footprint?: OsmWay; label: string }>;
+  gates?: Array<{ lat: number; lng: number; ref: string }>;
+}
+
+/** Gebäudehöhe in m aus OSM (height, building:levels), sonst Vorgabe */
+export function buildingHeightM(tags: Record<string, string>, fallback: number): number {
+  const h = parseFloat(tags.height ?? '');
+  if (Number.isFinite(h) && h > 0) return h;
+  const lv = parseFloat(tags['building:levels'] ?? '');
+  if (Number.isFinite(lv) && lv > 0) return lv * 4;
+  return fallback;
 }
 
 /** Funkstelle des Platzes laut Navigraph bzw. OurAirports */
