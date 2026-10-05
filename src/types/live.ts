@@ -1,6 +1,8 @@
 // filepath: src/types/live.ts
 /** Verkehrsquelle: erfundener Verkehr (SIM), echte Flieger per ADS-B zum Lotsen (LIVE) oder nur zum Zuschauen (WATCH) */
 export type TrafficMode = 'sim' | 'live' | 'watch';
+/** WATCH: alle echten Flieger, nur Anflüge oder nur Abflüge */
+export type WatchFilter = 'all' | 'in' | 'out';
 
 /** Echter Flieger aus adsb.lol (nicht gelotst) */
 export interface LiveAircraft {

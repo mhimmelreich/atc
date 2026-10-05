@@ -22,7 +22,7 @@ import { loadTelephony } from '@/game/Telephony';
 import { fetchLiveTraffic, fetchTrace, LIVE_POLL_MS } from '@/services/LiveTrafficService';
 import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
 import { fetchTowns, type Town } from '@/services/TownService';
-import type { TrafficMode } from '@/types/live';
+import type { TrafficMode, WatchFilter } from '@/types/live';
 
 const SIDEBAR_W = 288;
 const MOBILE_BREAKPOINT = 700;
@@ -39,6 +39,7 @@ const SOURCE_NAMES: Record<AirportSource, string> = {
 const RADIO_STORAGE = 'atc-radio';
 // WATCH: Ortschaften ab dieser Einwohnerzahl einblenden (0 = aus)
 const TOWNS_STORAGE = 'atc-towns-min';
+const WATCH_FILTER_STORAGE = 'atc-watch-filter';
 const TOWN_OPTIONS: Array<{ pop: number; label: string }> = [
   { pop: 0, label: 'AUS' }, { pop: 5000, label: '5k' }, { pop: 10000, label: '10k' },
   { pop: 20000, label: '20k' }, { pop: 50000, label: '50k' }, { pop: 100000, label: '100k' },
@@ -258,6 +259,16 @@ export function App() {
     const id = setInterval(poll, LIVE_POLL_MS);
     return () => { stopped = true; clearInterval(id); };
   }, [gameState.trafficMode, airport, spectator]);
+
+  // ── WATCH: Filter ALLE / IN / OUT für Liste und Radar ──
+  const [watchFilter, setWatchFilter] = useState<WatchFilter>(() => {
+    try { const v = localStorage.getItem(WATCH_FILTER_STORAGE); return v === 'in' || v === 'out' ? v : 'all'; } catch { return 'all'; }
+  });
+  useEffect(() => { engineRef.current?.setWatchFilter(watchFilter); }, [watchFilter]);
+  const changeWatchFilter = (f: WatchFilter) => {
+    setWatchFilter(f);
+    try { localStorage.setItem(WATCH_FILTER_STORAGE, f); } catch { /* nur Komfort */ }
+  };
 
   // ── WATCH: Ortschaften rund um den Zuschauer, gefiltert nach Einwohnern ──
   const [townMin, setTownMin] = useState<number>(() => {
@@ -643,6 +654,7 @@ export function App() {
         <WatchPanel
           aircraft={gameState.watch} roles={gameState.watchRoles} airport={airport} spectator={gameState.spectator}
           selectedId={gameState.selectedId} onSelect={handleSelectAircraft} traceStatus={traceStatus}
+          filter={watchFilter} onFilter={changeWatchFilter}
           onFocus={(ac) => { handleSelectAircraft(`live-${ac.hex}`); engineRef.current?.centerOn(ac.lat, ac.lng); }}
         />
       ) : (<>

@@ -1,7 +1,7 @@
 // filepath: src/game/GameEngine.ts
 import type { Airport, Runway } from '@/types/airport';
 import type { Aircraft, ATCCommand, ConflictPair, TrailPoint } from '@/types/aircraft';
-import type { LiveAircraft, LiveInbound, LiveStatus, TrafficMode } from '@/types/live';
+import type { LiveAircraft, LiveInbound, LiveStatus, TrafficMode, WatchFilter } from '@/types/live';
 import type { Waypoint, STAR } from '@/types/navdata';
 import type { RadioMessage } from '@/types/radio';
 import type { Weather } from '@/types/weather';
@@ -146,6 +146,7 @@ export class GameEngine {
   private liveTrails = new Map<string, TrailPoint[]>();
   private liveInbound = new Map<string, Inbound>(); // hex → Anflug zum gewählten Platz
   private takenOver = new Set<string>();             // hex der übernommenen echten Flieger
+  private watchFilter: WatchFilter = 'all';          // WATCH: nur Anflüge, nur Abflüge oder alle
   private liveFrame: LiveAircraft[] = [];            // echte Flieger im letzten Bild (für Klicks)
   private liveFinals = new Map<string, { heading: number; at: number }>(); // hex → Bahnkurs, zuletzt im Endanflug gesehen
   private track: RenderOptions['track'] = null;                            // WATCH: Flugbahn des gewählten Fliegers
@@ -378,7 +379,7 @@ export class GameEngine {
       this.lastTs = ts;
 
       // Echter Verkehr: auf jetzt vorausgerechnet, Hindernis für die Staffelung
-      const live = this.liveMode ? this.liveNow() : [];
+      let live = this.liveMode ? this.liveNow() : [];
       this.liveFrame = live;
       this.manager.setObstacles(live.flatMap((ac) => (ac.altFt === null ? [] : [{ id: liveId(ac.hex), lat: ac.lat, lng: ac.lng, altitudeFt: ac.altFt }])));
 
@@ -396,6 +397,12 @@ export class GameEngine {
       this.conflicts = this.conflicts.filter((c) => present.has(c.a) && present.has(c.b));
 
       const roles = this.liveMode ? this.inboundView() : new Map<string, LiveInbound>();
+      // WATCH-Filter IN/OUT: nur diese Flieger zeigen und anklickbar machen
+      if (this.watching && this.watchFilter !== 'all') {
+        const wantOut = this.watchFilter === 'out';
+        live = live.filter((ac) => { const r = roles.get(ac.hex); return !!r && !!r.out === wantOut; });
+        this.liveFrame = live;
+      }
       // WATCH: gewählter Flieger weg (gelandet, außer Reichweite) → Auswahl aufheben
       let selectedId = this.state.selectedId;
       if (this.watching && selectedId && !live.some((ac) => liveId(ac.hex) === selectedId)) selectedId = null;
@@ -522,6 +529,9 @@ export class GameEngine {
 
   /** Blick auf einen Punkt richten (z. B. Suchtreffer) */
   centerOn(lat: number, lng: number): void { this.viewLat = lat; this.viewLng = lng; }
+
+  /** WATCH: Anzeige auf Anflüge (in) oder Abflüge (out) beschränken */
+  setWatchFilter(f: WatchFilter): void { this.watchFilter = f; }
 
   setSpectator(pos: Spectator | null): void {
     this.state = { ...this.state, spectator: pos };

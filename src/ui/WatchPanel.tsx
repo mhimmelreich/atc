@@ -2,7 +2,7 @@
 // WATCH: echter Verkehr zum Zuschauen – gewählter Flieger mit allen Daten, darunter alle Flieger nach Entfernung
 import { useState } from 'react';
 import type { Airport } from '@/types/airport';
-import type { LiveAircraft, LiveInbound } from '@/types/live';
+import type { LiveAircraft, LiveInbound, WatchFilter } from '@/types/live';
 import { bearingBetween, distanceNM } from '@/utils/geo';
 
 interface Props {
@@ -17,10 +17,15 @@ interface Props {
   onFocus: (ac: LiveAircraft) => void;
   /** Hinweis, wenn die vergangene Flugbahn fehlt */
   traceStatus: string | null;
+  /** Nur Anflüge (IN), nur Abflüge (OUT) oder alle; filtert auch das Radar */
+  filter: WatchFilter;
+  onFilter: (f: WatchFilter) => void;
 }
 
 const MAX_LIST = 40;
 const COLOR = { in: '#78d7ff', out: '#ffbe5a', other: '#aabeb4' };
+
+const FILTERS: Array<[WatchFilter, string, string]> = [['all', 'ALLE', '#9ab'], ['in', 'IN', COLOR.in], ['out', 'OUT', COLOR.out]];
 
 const roleColor = (r?: LiveInbound) => (r?.out ? COLOR.out : r ? COLOR.in : COLOR.other);
 const roleText = (r?: LiveInbound) => (r?.out ? `→ ${r.dest ?? '?'}` : r ? `${r.guess ? '?' : r.origin ?? '?'} →` : '');
@@ -39,7 +44,7 @@ const vsArrow = (vs: number | null) => ((vs ?? 0) > 300 ? '↑' : (vs ?? 0) < -3
 const matches = (ac: LiveAircraft, q: string) =>
   [ac.callsign, ac.reg, ac.type, ac.route, ac.hex].some((v) => v?.toUpperCase().includes(q));
 
-export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, onSelect, onFocus, traceStatus }: Props) {
+export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, onSelect, onFocus, traceStatus, filter, onFilter }: Props) {
   const [query, setQuery] = useState('');
   const q = query.trim().toUpperCase();
   // Entfernung vom Zuschauer: GPS-Standort oder der Platz
@@ -68,10 +73,23 @@ export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, on
 
       <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, display: 'flex', justifyContent: 'space-between' }}>
         <span>LIVE TRAFFIC ({q ? `${found.length}/${aircraft.length}` : aircraft.length})</span>
-        <span><span style={{ color: COLOR.in }}>■ IN</span> <span style={{ color: COLOR.out }}>■ OUT</span></span>
+        <span style={{ display: 'flex', gap: 3 }}>
+          {FILTERS.map(([f, label, color]) => (
+            <button
+              key={f}
+              onClick={() => onFilter(f)}
+              title={f === 'all' ? 'Alle Flieger' : f === 'in' ? 'Nur Anflüge' : 'Nur Abflüge'}
+              style={{
+                background: filter === f ? '#0a2a1a' : 'transparent', color, cursor: 'pointer',
+                border: `1px solid ${filter === f ? color : '#1a4428'}`, borderRadius: 2,
+                fontFamily: '"Courier New", monospace', fontSize: 10, padding: '0 5px', letterSpacing: 1,
+              }}
+            >{f === 'all' ? label : `■ ${label}`}</button>
+          ))}
+        </span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto', flex: 1, minHeight: 110 }}>
-        {list.length === 0 && <div style={{ color: '#446644', fontSize: 11, textAlign: 'center', paddingTop: 16 }}>{q ? 'KEIN TREFFER' : 'NO TRAFFIC'}</div>}
+        {list.length === 0 && <div style={{ color: '#446644', fontSize: 11, textAlign: 'center', paddingTop: 16 }}>{q ? 'KEIN TREFFER' : filter === 'in' ? 'KEINE ANFLÜGE' : filter === 'out' ? 'KEINE ABFLÜGE' : 'NO TRAFFIC'}</div>}
         {list.map((ac) => {
           const id = `live-${ac.hex}`;
           const role = roles[ac.hex];
