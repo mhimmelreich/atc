@@ -120,6 +120,8 @@ async function fetchLandmarks(lat: number, lon: number): Promise<Landmark[]> {
     } else if (heightM < MIN_HEIGHT_M || heightM > 700) continue;
     // Gebäude ohne Namen ab 100 m sind meist Fehlerfassungen; Türme und Schornsteine dürfen namenlos sein
     if (!tower && !stadium && !t.name) continue;
+    // Hütten, Schuppen usw. über 100 m sind Tippfehler (z. B. Geländehöhe statt Gebäudehöhe)
+    if (!tower && !stadium && /^(hut|shed|cabin|shelter|garage|garages|roof|barn|kiosk|toilets|house|bungalow)$/.test(t.building ?? '')) continue;
     if (!tower && !stadium && rings.length === 0) continue;
     const [cLat, cLng] = centre(el, rings);
     out.push({ name: t.name ?? null, kind: stadium ? 'stadium' : tower ? 'tower' : 'building', heightM: Math.round(heightM), lat: round(cLat), lng: round(cLng), rings });
