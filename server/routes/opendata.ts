@@ -235,6 +235,22 @@ router.get('/telephony', async (_req, res) => {
   }
 });
 
+// Klarnamen von Flughäfen, z. B. für Start und Ziel eines Flugs: ?icao=EDDF,EGLL
+router.get('/names', async (req, res) => {
+  const codes = String(req.query.icao ?? '').toUpperCase().split(',').filter((c) => /^[A-Z0-9]{3,4}$/.test(c)).slice(0, 20);
+  let d: OpenData;
+  try {
+    d = await loadData();
+  } catch {
+    res.status(503).json({ error: 'Flughafendaten nicht verfügbar' });
+    return;
+  }
+  const names: Record<string, string> = {};
+  for (const c of codes) { const a = d.airports.get(c); if (a?.name) names[c] = a.name; }
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.json(names);
+});
+
 // Nächster Verkehrsflughafen zu einer Position (Zuschauer per GPS)
 router.get('/nearest', async (req, res) => {
   const lat = Number(req.query.lat);

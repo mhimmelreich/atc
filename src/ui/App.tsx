@@ -310,6 +310,28 @@ export function App() {
     return () => { stopped = true; clearInterval(id); };
   }, [traceHex]);
 
+  // ── WATCH: Start und Ziel des gewählten Flugs im Klartext oben in der Mitte ──
+  const [airportNames, setAirportNames] = useState<Record<string, string>>({});
+  const selectedLive = watching ? gameState.watch.find((a) => `live-${a.hex}` === gameState.selectedId) : undefined;
+  const selectedRoute = selectedLive?.route;
+  useEffect(() => {
+    const missing = (selectedRoute ?? '').split('-').filter((c) => c && !(c in airportNames));
+    if (missing.length === 0) return;
+    fetch(`${import.meta.env.BASE_URL}api/opendata/names?icao=${missing.join(',')}`)
+      .then((r) => (r.ok ? r.json() : {}))
+      // Unbekannte merken (leer), damit nicht ständig nachgefragt wird
+      .then((names: Record<string, string>) => setAirportNames((prev) => ({ ...prev, ...Object.fromEntries(missing.map((c) => [c, names[c] ?? ''])) })))
+      .catch(() => { /* dann eben nur die Codes */ });
+  }, [selectedRoute, airportNames]);
+  const routeBanner = selectedLive
+    ? {
+        callsign: selectedLive.callsign,
+        text: selectedRoute
+          ? selectedRoute.split('-').map((c) => (airportNames[c] ? `${airportNames[c]} (${c})` : c)).join('  →  ')
+          : 'Start und Ziel unbekannt',
+      }
+    : null;
+
   // ── Wetter: METAR beim Laden des Platzes, dann alle 10 Minuten ──
   useEffect(() => {
     if (!airport) return;
@@ -670,7 +692,16 @@ export function App() {
       )}
 
       {(!isMobile || !bottomOpen) && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, position: 'relative' }}>
+          {routeBanner && (
+            <div style={{
+              position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 5, pointerEvents: 'none',
+              maxWidth: 'calc(100% - 140px)', textAlign: 'center', padding: '4px 12px', borderRadius: 3,
+              background: 'rgba(5,14,5,0.8)', border: '1px solid #1a4428', color: '#cde', fontSize: isMobile ? 11 : 13,
+            }}>
+              <span style={{ color: '#78d7ff', fontWeight: 'bold' }}>{routeBanner.callsign}</span>{'  '}{routeBanner.text}
+            </div>
+          )}
           <RadarCanvas
             engine={engineRef.current}
             aircraft={gameState.aircraft}
