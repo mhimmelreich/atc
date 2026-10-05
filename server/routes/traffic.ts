@@ -171,8 +171,10 @@ async function fetchSnapshot(lat: number, lon: number): Promise<Snapshot> {
  * undefined, wenn nichts Brauchbares da ist (Fehler und auch der letzte Stand zu alt)
  */
 export async function snapshotAt(lat: number, lon: number): Promise<Snapshot | undefined> {
-  const qLat = Math.round(lat * 100) / 100;
-  const qLon = Math.round(lon * 100) / 100;
+  // Auf 0,05° (≈ 3 NM) gerundet: Spieler und Tagesaufzeichnung am selben Platz teilen sich eine Abfrage,
+  // auch wenn ihre Platzkoordinaten (Navigraph, OurAirports) leicht abweichen; bei 120 NM Umkreis egal
+  const qLat = Math.round(lat * 20) / 20;
+  const qLon = Math.round(lon * 20) / 20;
   const key = `${qLat},${qLon}`;
   const now = Date.now();
 
