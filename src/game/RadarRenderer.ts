@@ -559,7 +559,7 @@ export class RadarRenderer {
       }
 
       // Labels (entfallen, sobald die aufgemalte Bezeichnung lesbar ist)
-      if (9 * pxPerM >= 5) continue;
+      if (9 * pxPerM >= 10) continue;
       const labelFontSize = rangeNM <= 12 ? 11 : 9;
       ctx.fillStyle = C.RWY_LABEL;
       ctx.font = `bold ${labelFontSize}px "Courier New"`;

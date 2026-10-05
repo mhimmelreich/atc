@@ -370,19 +370,16 @@ export class Scene3DRenderer {
         const p = this.proj({ x: t.x + (ux * a + uy * c) / 1852, y: t.y + (uy * a - ux * c) / 1852, z: t.z });
         return p ? { x: p.x, y: p.y } : null;
       };
-      // Maßstab am näheren Ende bestimmt, wie viel Markierung gezeichnet wird
-      const z = Math.min(this.camSpace(t).z, this.camSpace(e).z);
-      if (z < this.near) {
-        ctx.strokeStyle = COL.RWY;
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        this.line(t, e);
-        ctx.stroke();
-        continue;
-      }
-      const pxPerM = this.focal / z / 1852;
+      // Teil der Bahn vor der Kamera (Tiefe ist längs der Bahn linear); dahinter wird abgeschnitten
+      const L = lenNM * 1852;
+      const z0 = this.camSpace(t).z, z1 = this.camSpace(e).z, zMin = this.near * 1.5;
+      if (z0 < zMin && z1 < zMin) continue;
+      const aCut = z0 === z1 ? 0 : ((zMin - z0) / (z1 - z0)) * L;
+      const clip: [number, number] = z0 >= zMin && z1 >= zMin ? [0, L] : z0 < zMin ? [aCut, L] : [0, aCut];
+      // Maßstab am nächsten sichtbaren Punkt bestimmt, wie viel Markierung gezeichnet wird
+      const pxPerM = this.focal / Math.max(zMin, Math.min(z0, z1)) / 1852;
       const widthM = Math.max(r.widthM, 3 / pxPerM);
-      drawRunwayMarkings(ctx, P, lenNM * 1852, widthM, r.id, r.recipId, pxPerM, COL.RWY_SURFACE, 'rgba(235,235,235,0.85)');
+      drawRunwayMarkings(ctx, P, L, widthM, r.id, r.recipId, pxPerM, COL.RWY_SURFACE, 'rgba(235,235,235,0.85)', clip);
     }
     if (!labels) return;
     ctx.fillStyle = COL.RWY_LABEL;
@@ -391,7 +388,7 @@ export class Scene3DRenderer {
     for (const r of runways) {
       const p = this.proj(this.world(r.thresholdLat, r.thresholdLng));
       // entfällt, sobald die aufgemalte Bezeichnung lesbar ist
-      if (p && p.depth < Scene3DRenderer.distanceFor(40) && (9 * this.focal) / p.depth / 1852 < 5) ctx.fillText(r.id, p.x, p.y + 12);
+      if (p && p.depth < Scene3DRenderer.distanceFor(40) && (9 * this.focal) / p.depth / 1852 < 10) ctx.fillText(r.id, p.x, p.y + 12);
     }
   }
 

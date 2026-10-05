@@ -88,10 +88,13 @@ type Proj = (a: number, c: number) => { x: number; y: number } | null;
  */
 export function drawRunwayMarkings(
   ctx: CanvasRenderingContext2D, P: Proj, lengthM: number, widthM: number, idA: string, idB: string,
-  pxPerM: number, surface: string, paint: string,
+  pxPerM: number, surface: string, paint: string, clip: [number, number] = [0, lengthM],
 ): void {
+  // Alle Flächen sind achsparallele Rechtecke in Bahnkoordinaten: Abschneiden = a begrenzen
+  const [a0, a1] = clip;
   const poly = (pts: LocalPt[]) => {
-    const s = pts.map(([a, c]) => P(a, c));
+    if (pts.every(([a]) => a < a0) || pts.every(([a]) => a > a1)) return false;
+    const s = pts.map(([a, c]) => P(Math.max(a0, Math.min(a1, a)), c));
     if (s.some((p) => !p)) return false;
     s.forEach((p, i) => (i === 0 ? ctx.moveTo(p!.x, p!.y) : ctx.lineTo(p!.x, p!.y)));
     ctx.closePath();
@@ -113,6 +116,7 @@ export function drawRunwayMarkings(
   if (9 * pxPerM < 5) return;
   // Bezeichnung: lokale Abbildung um den Textmittelpunkt (für die Perspektive genau genug)
   for (const t of m.texts) {
+    if (t.a - t.h < a0 || t.a + t.h > a1) continue;
     const p0 = P(t.a, t.c), pa = P(t.a + 1, t.c), pc = P(t.a, t.c + 1);
     if (!p0 || !pa || !pc) continue;
     const s = t.flip ? -1 : 1;
