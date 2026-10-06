@@ -1220,5 +1220,5 @@ export function drawLandmarks2D(
 /** Quellenhinweis (ODbL) für alles, was gerade zu sehen ist; leer, wenn nichts davon */
 export function sourceCredit(o: RenderOptions): string {
   const osm = [o.towns?.length ? 'Orte' : '', o.landmarks?.length ? 'Bauwerke' : '', o.roads?.length ? 'Autobahnen' : ''].filter(Boolean).join(', ');
-  return [o.live ? 'Traffic: adsb.lol (ODbL)' : '', osm ? `${osm}: © OpenStreetMap` : ''].filter(Boolean).join(' · ');
+  return [o.live || o.dayTracks?.length ? 'Traffic: adsb.lol (ODbL)' : '', osm ? `${osm}: © OpenStreetMap` : ''].filter(Boolean).join(' · ');
 }

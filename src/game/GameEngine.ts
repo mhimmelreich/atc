@@ -374,6 +374,7 @@ export class GameEngine {
 
   /** Übernehmbare echte Anflüge (WATCH: alle echten Flieger) an ihrer aktuellen Position (für Klicks aufs Radar) */
   liveTargets(): Array<{ id: string; lat: number; lng: number; altitudeFt: number }> {
+    if (this.dayView) return []; // ausgeblendet, also auch nicht anklickbar
     return this.liveFrame
       .filter((ac) => this.watching || this.liveInbound.has(ac.hex))
       .map((ac) => ({ id: liveId(ac.hex), lat: ac.lat, lng: ac.lng, altitudeFt: ac.altFt ?? 0 }));
@@ -477,7 +478,8 @@ export class GameEngine {
           stars: this.activeStars(),
           display: this.state.display,
           activeRunwayIds: this.state.activeRunwayIds,
-          live: this.liveMode ? { aircraft: live, trails: this.liveTrails, inbound: roles } : undefined,
+          // Tagesansicht: nur die Tageslinien, der laufende Verkehr ist ausgeblendet
+          live: this.liveMode && !this.dayView ? { aircraft: live, trails: this.liveTrails, inbound: roles } : undefined,
           spectator: this.watching ? this.state.spectator : null,
           towns: this.watching ? this.towns : undefined,
           dayTracks: this.watching ? this.visibleDayTracks() : undefined,
@@ -623,6 +625,8 @@ export class GameEngine {
   /** WATCH TAG: Starts und Landungen eines Tages als Linien (null: aus) */
   private dayTracks: DayFlight[] | null = null;
   setDayTracks(flights: DayFlight[] | null): void { this.dayTracks = flights; }
+  /** WATCH-Tagesansicht ist an */
+  private get dayView(): boolean { return this.watching && this.dayTracks !== null; }
   private visibleDayTracks(): DayFlight[] | undefined {
     if (!this.dayTracks) return undefined;
     return this.watchFilter === 'all' ? this.dayTracks : this.dayTracks.filter((f) => f.dir === this.watchFilter);
