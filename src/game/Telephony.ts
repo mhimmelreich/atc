@@ -7,6 +7,13 @@ const BUILTIN: Record<string, string> = {
   DLH: 'LUFTHANSA', EZY: 'EASY', RYR: 'RYANAIR', BAW: 'SPEEDBIRD', AFL: 'AEROFLOT', UAE: 'EMIRATES',
   THY: 'TURKISH', SWR: 'SWISS', KLM: 'KLM', IBE: 'IBERIA', AUA: 'AUSTRIAN', SAS: 'SCANDINAVIAN',
   TAP: 'AIR PORTUGAL', VKG: 'VIKING', CFG: 'CONDOR', TUI: 'TUI JET',
+  // In OpenFlights veraltet oder falsch geschrieben
+  OCN: 'DISCOVER', DLA: 'DOLOMITI', ITY: 'ITARROW', BEL: 'BEELINE', VOE: 'VOLOTEA', ENT: 'ENTER', RJA: 'JORDANIAN',
+};
+
+// Rufnamen, die die Sprachausgabe sonst verschluckt ("Condor" klang wie "Cond"): Lautschrift für Piper
+const CALLSIGN_PHONEMES: Record<string, string> = {
+  condor: 'kˈɔnˌdɔːɹ',
 };
 
 let table: Record<string, string> = { ...BUILTIN };
@@ -34,6 +41,9 @@ export function radioCallsign(callsign: string): SpokenCallsign {
   const short = name.length <= 3;
   return {
     text: `${short ? name : titleCase(name)} ${m[2]}`,
-    spoken: `${short ? name.split('').join(' ') : plain(titleCase(name))} ${spellAlnum(m[2])}`,
+    spoken: `${short ? name.split('').join(' ') : withPhonemes(plain(titleCase(name)))} ${spellAlnum(m[2])}`,
   };
 }
+
+const withPhonemes = (s: string): string =>
+  s.replace(/\p{L}+/gu, (w) => (CALLSIGN_PHONEMES[w.toLowerCase()] ? `[[ ${CALLSIGN_PHONEMES[w.toLowerCase()]} ]]` : w));
