@@ -805,7 +805,7 @@ export function App() {
           filter={watchFilter} onFilter={changeWatchFilter}
           transit={radioPrefs.transit} onTransit={(on) => changeRadioPrefs({ transit: on })}
           radio={radioPrefs.watch} onRadio={(on) => changeRadioPrefs({ watch: on })}
-          onFocus={(ac) => { handleSelectAircraft(`live-${ac.hex}`); engineRef.current?.centerOn(ac.lat, ac.lng); }}
+          onFocus={(ac) => { handleSelectAircraft(`live-${ac.hex}`); if (!gameState.followId) engineRef.current?.centerOn(ac.lat, ac.lng); }}
         />
       ) : (<>
       {/* Alerts */}

@@ -451,7 +451,8 @@ export class GameEngine {
         const own = real ? null : aircraft.find((ac) => ac.id === followId);
         const pos = real ? { lat: real.lat, lng: real.lng, alt: real.altFt ?? 0 } : own ? { lat: own.lat, lng: own.lng, alt: own.altitudeFt } : null;
         if (pos) { this.viewLat = pos.lat; this.viewLng = pos.lng; this.viewAltFt = pos.alt; }
-        else { followId = null; this.viewAltFt = 0; }
+        // WATCH: Folgen bleibt an, bis der nächste gewählte Flug übernimmt (selectAircraft)
+        else if (!this.watching) { followId = null; this.viewAltFt = 0; }
       }
       // WATCH: gewählter Flieger weg (gelandet, außer Reichweite) → Auswahl aufheben
       let selectedId = this.state.selectedId;
@@ -856,7 +857,10 @@ export class GameEngine {
   selectAircraft(id: string | null): void {
     // WATCH: echten Flieger nur auswählen (Details in der Seitenleiste)
     if (this.watching) {
-      this.state = { ...this.state, selectedId: id && this.liveFrame.some((ac) => liveId(ac.hex) === id) ? id : null };
+      const selectedId = id && this.liveFrame.some((ac) => liveId(ac.hex) === id) ? id : null;
+      // Kamera folgt: auch dem neu gewählten Flug
+      const followId = this.state.followId && selectedId ? selectedId : this.state.followId;
+      this.state = { ...this.state, selectedId, followId };
       return;
     }
     // Klick auf einen echten Anflug übernimmt ihn
