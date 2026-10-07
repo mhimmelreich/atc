@@ -25,6 +25,7 @@ import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
 import { fetchTowns, type Town } from '@/services/TownService';
 import { fetchLandmarks } from '@/services/LandmarkService';
 import { fetchRoads } from '@/services/RoadService';
+import { airlineName, loadAirlines } from '@/game/Airlines';
 import type { TrafficMode, WatchFilter } from '@/types/live';
 import { nextLander } from '@/game/NextLander';
 
@@ -420,6 +421,8 @@ export function App() {
     engineRef.current?.selectAircraft(id);
   }, [watching, airport, watchFilter, gameState.watch, gameState.watchRoles, gameState.watchLanded, gameState.activeRunwayIds, gameState.selectedId]);
 
+  useEffect(() => { if (watching) void loadAirlines(); }, [watching]);
+
   // ── WATCH: Start und Ziel des gewählten Flugs im Klartext oben in der Mitte ──
   const [airportNames, setAirportNames] = useState<Record<string, { name: string; country: string }>>({});
   const selectedLive = watching ? gameState.watch.find((a) => `live-${a.hex}` === gameState.selectedId) : undefined;
@@ -436,6 +439,7 @@ export function App() {
   const routeBanner = selectedLive
     ? {
         callsign: selectedLive.callsign,
+        airline: airlineName(selectedLive.callsign),
         text: selectedRoute
           ? selectedRoute.split('-').map((c) => {
               // Klarname (ICAO, Land)
@@ -837,7 +841,7 @@ export function App() {
               maxWidth: 'calc(100% - 140px)', textAlign: 'center', padding: '4px 12px', borderRadius: 3,
               background: 'rgba(5,14,5,0.8)', border: '1px solid #1a4428', color: '#cde', fontSize: isMobile ? 11 : 13,
             }}>
-              <span style={{ color: '#78d7ff', fontWeight: 'bold' }}>{routeBanner.callsign}</span>{'  '}{routeBanner.text}
+              <span style={{ color: '#78d7ff', fontWeight: 'bold' }}>{routeBanner.callsign}</span>{routeBanner.airline && <span style={{ color: '#9fc8e0' }}>{' · '}{routeBanner.airline}</span>}{'  '}{routeBanner.text}
             </div>
           )}
           <RadarCanvas

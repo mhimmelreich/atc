@@ -1,5 +1,6 @@
 // filepath: src/ui/WatchPanel.tsx
 // WATCH: echter Verkehr zum Zuschauen – gewählter Flieger mit allen Daten, darunter alle Flieger nach Entfernung
+import { airlineName } from '@/game/Airlines';
 import { useState } from 'react';
 import type { Airport } from '@/types/airport';
 import type { LiveAircraft, LiveInbound, WatchFilter } from '@/types/live';
@@ -124,6 +125,7 @@ function Details({ ac, role, airport, spectator }: { ac: LiveAircraft; role?: Li
   const brg = center ? Math.round(bearingBetween(center.lat, center.lng, ac.lat, ac.lng)) : null;
   const age = Math.max(0, Math.round((Date.now() - ac.ts) / 1000));
   const rows: Array<[string, string]> = [
+    ...(airlineName(ac.callsign) ? [['AIRLINE', airlineName(ac.callsign)!] as [string, string]] : []),
     ['TYPE', [ac.type, ac.reg].filter(Boolean).join(' · ') || '—'],
     ['ROUTE', ac.route?.replace(/-/g, ' → ') ?? '—'],
     ...(role && !role.out ? [['STAR', starText(role.star)] as [string, string]] : []),

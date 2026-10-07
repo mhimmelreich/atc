@@ -214,6 +214,8 @@ function navaidType(type: string): Waypoint['type'] | null {
 // ICAO-Präfix → Rufname, z. B. DLH → LUFTHANSA, BAW → SPEEDBIRD
 const AIRLINES_URL = 'https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat';
 let telephony: Record<string, string> | null = null;
+/** ICAO-Präfix → Name der Airline, z. B. CFG → Condor */
+let airlineNames: Record<string, string> | null = null;
 
 async function loadTelephony(): Promise<Record<string, string>> {
   if (telephony) return telephony;
@@ -221,8 +223,12 @@ async function loadTelephony(): Promise<Record<string, string>> {
   const rows = parseCsv(`id,name,alias,iata,icao,callsign,country,active\n${await ensureFile('airlines.dat', AIRLINES_URL)}`);
   const map: Record<string, string> = {};
   const active: Record<string, boolean> = {};
+  const names: Record<string, string> = {};
+  const namesActive: Record<string, boolean> = {};
   for (const r of rows) {
     const icao = r.icao.toUpperCase();
+    const name = r.name === '\\N' ? '' : r.name.trim();
+    if (/^[A-Z]{3}$/.test(icao) && name && (!names[icao] || (r.active === 'Y' && !namesActive[icao]))) { names[icao] = name; namesActive[icao] = r.active === 'Y'; }
     const callsign = r.callsign === '\\N' ? '' : r.callsign.trim().toUpperCase();
     if (!/^[A-Z]{3}$/.test(icao) || !callsign) continue;
     const isActive = r.active === 'Y';
@@ -230,6 +236,7 @@ async function loadTelephony(): Promise<Record<string, string>> {
     if (!map[icao] || (isActive && !active[icao])) { map[icao] = callsign; active[icao] = isActive; }
   }
   telephony = map;
+  airlineNames = names;
   return map;
 }
 
@@ -237,6 +244,18 @@ router.get('/telephony', async (_req, res) => {
   try {
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.json(await loadTelephony());
+  } catch (err) {
+    console.error('opendata: Airline-Liste nicht verfügbar:', err);
+    res.status(503).json({ error: 'Airline-Liste nicht verfügbar' });
+  }
+});
+
+// Namen der Airlines nach ICAO-Präfix (OpenFlights, ODbL)
+router.get('/airlines', async (_req, res) => {
+  try {
+    await loadTelephony();
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.json(airlineNames ?? {});
   } catch (err) {
     console.error('opendata: Airline-Liste nicht verfügbar:', err);
     res.status(503).json({ error: 'Airline-Liste nicht verfügbar' });
