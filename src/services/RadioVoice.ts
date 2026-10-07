@@ -37,6 +37,8 @@ export class RadioVoice {
   private playing = false;
   private enabled = false;
   private stopCurrent: (() => void) | null = null;
+  /** Zählt clear(): eine schon geladene Meldung von davor nicht mehr abspielen */
+  private epoch = 0;
 
   setEnabled(on: boolean): void {
     this.enabled = on;
@@ -55,6 +57,7 @@ export class RadioVoice {
   }
 
   clear(): void {
+    this.epoch++;
     this.queue = [];
     this.buffers.clear();
     this.stopCurrent?.();
@@ -80,6 +83,17 @@ export class RadioVoice {
     if (ctx) for (const m of this.queue.slice(0, PREFETCH)) void this.load(ctx, m);
   }
 
+  /** Laufender Ton-Kontext; angehaltenen wieder starten (geht nach einer früheren Nutzeraktion ohne neue) */
+  private async wake(): Promise<AudioContext | null> {
+    if (!this.ctx) this.unlock();
+    const ctx = this.ctx;
+    if (!ctx) return null;
+    if (ctx.state !== 'running') {
+      try { await Promise.race([ctx.resume(), sleep(1500)]); } catch { /* bleibt angehalten */ }
+    }
+    return this.running();
+  }
+
   private load(ctx: AudioContext, msg: RadioMessage): Promise<AudioBuffer | null> {
     let buffer = this.buffers.get(msg.id);
     if (!buffer) {
@@ -99,12 +113,14 @@ export class RadioVoice {
     if (!msg) return;
     this.playing = true;
     try {
-      // Zu alt, oder noch keine Freigabe durch eine Nutzeraktion: Meldung fällt weg
-      const ctx = this.running();
+      // Zu alt, oder keine Freigabe durch eine Nutzeraktion: Meldung fällt weg. Ein vom Browser
+      // angehaltener Ton-Kontext (z. B. nach längerer Ruhe, Tab im Hintergrund) wird erst wieder geweckt.
+      const epoch = this.epoch;
+      const ctx = await this.wake();
       if (!ctx || Date.now() - msg.ts > STALE_MS) return;
       const buffer = await this.load(ctx, msg);
       this.buffers.delete(msg.id);
-      if (!this.enabled) return;
+      if (!this.enabled || epoch !== this.epoch) return;
       // Sprachdienst nicht erreichbar: Browser-Sprachausgabe
       if (buffer) await this.playRadio(ctx, buffer, msg.from === 'pilot');
       else await this.speakFallback(msg);
