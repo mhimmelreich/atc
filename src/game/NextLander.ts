@@ -41,8 +41,13 @@ export function nextLander(watch: LiveAircraft[], roles: Record<string, LiveInbo
 
 /** Auf dem Endanflug (bis 30 NM, auf der Pistenachse, Kurs wie die Bahn, nicht steigend): Entfernung zur Schwelle */
 function finalDistance(ac: LiveAircraft, runways: Airport['runways']): number | null {
+  return finalRunway(ac, runways)?.miles ?? null;
+}
+
+/** Bahn, auf deren Endanflug der Flieger ist, mit Entfernung zur Schwelle in NM */
+export function finalRunway(ac: LiveAircraft, runways: Airport['runways']): { runway: Airport['runways'][number]; miles: number } | null {
   if (ac.track === null || (ac.vs ?? 0) > 300) return null;
-  let best: number | null = null;
+  let best: { runway: Airport['runways'][number]; miles: number } | null = null;
   for (const r of runways) {
     const course = bearingBetween(r.thresholdLat, r.thresholdLng, r.endLat, r.endLng);
     const d = distanceNM(ac.lat, ac.lng, r.thresholdLat, r.thresholdLng);
@@ -50,7 +55,7 @@ function finalDistance(ac: LiveAircraft, runways: Airport['runways']): number | 
     const dev = Math.abs(((bearingBetween(ac.lat, ac.lng, r.thresholdLat, r.thresholdLng) - course + 540) % 360) - 180);
     const trk = Math.abs(((ac.track - course + 540) % 360) - 180);
     // Seitlich höchstens ~0,7 NM von der Achse
-    if (trk < 20 && dev < 30 && d * Math.sin((dev * Math.PI) / 180) < 0.7 && (best === null || d < best)) best = d;
+    if (trk < 20 && dev < 30 && d * Math.sin((dev * Math.PI) / 180) < 0.7 && (best === null || d < best.miles)) best = { runway: r, miles: d };
   }
   return best;
 }

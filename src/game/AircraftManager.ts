@@ -131,6 +131,11 @@ export class AircraftManager {
     this.emit({ type: 'radio', message: { id: ++this.radioSeq, ts: Date.now(), from: 'info', aircraftId, callsign, text, spoken: '', ...APPROACH_VOICE } });
   }
 
+  /** Fertiger Funkspruch von außen (WATCH: echter Flug) ins Funk-Log */
+  sayExternal(message: Omit<RadioMessage, 'id' | 'ts'>): void {
+    this.emit({ type: 'radio', message: { ...message, id: ++this.radioSeq, ts: Date.now() } });
+  }
+
   setSpawnStars(stars: STAR[]): void {
     this.spawnStars = stars;
   }

@@ -33,12 +33,12 @@ export interface RadioContext {
   stars: STAR[];
 }
 
-const phrase = (text: string, spoken = text): Phrase => ({ text, spoken });
-const join = (parts: Phrase[]): Phrase => ({
+export const phrase = (text: string, spoken = text): Phrase => ({ text, spoken });
+export const join = (parts: Phrase[]): Phrase => ({
   text: parts.map((p) => p.text).join(', '),
   spoken: parts.map((p) => p.spoken).join(', '),
 });
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+export const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function hash(s: string): number {
   let h = 2166136261;
@@ -62,12 +62,13 @@ export interface StationInfo {
 }
 
 /** Rufnamen und Frequenzen von Anflugkontrolle und Turm; fehlt der Name in den Daten, nach der Stadt */
-export function stations(airport: Airport): { approach: StationInfo; tower: StationInfo } {
+export function stations(airport: Airport): { approach: StationInfo; departure: StationInfo; tower: StationInfo } {
   const info = (s: Station | undefined, role: string): StationInfo => ({
     name: s?.name ?? `${placeName(airport)} ${s?.role ?? role}`,
     freq: s ? frequencyPhrase(s.mhz).text : null,
   });
-  return { approach: info(airport.stations?.approach, 'Approach'), tower: info(airport.stations?.tower, 'Tower') };
+  const dep = airport.stations?.departure ?? (airport.stations?.approach?.role === 'Approach' ? airport.stations.approach : undefined);
+  return { approach: info(airport.stations?.approach, 'Approach'), departure: info(dep, 'Departure'), tower: info(airport.stations?.tower, 'Tower') };
 }
 
 // USA, Kanada und der US-Pazifik stellen den Höhenmesser in inHg ein

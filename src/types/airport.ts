@@ -72,7 +72,7 @@ export interface Airport {
   /** Stadt (OurAirports), für den Rufnamen der Anflugkontrolle */
   city?: string;
   /** Anflugkontrolle und Turm */
-  stations?: { approach?: Station; tower?: Station };
+  stations?: { approach?: Station; departure?: Station; tower?: Station };
   lat: number;
   lng: number;
   elevationFt: number;

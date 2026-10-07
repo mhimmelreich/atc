@@ -194,6 +194,7 @@ const FREQUENCY_TYPES: Record<string, Omit<FrequencyEntry, 'label' | 'mhz'>> = {
   APP: { kind: 'approach', rank: 2, role: 'Approach' },
   'A/D': { kind: 'approach', rank: 3, role: 'Approach' },
   RDR: { kind: 'approach', rank: 4, role: 'Approach' },
+  DEP: { kind: 'departure', rank: 0, role: 'Departure' },
   TWR: { kind: 'tower', rank: 0, role: 'Tower' },
 };
 

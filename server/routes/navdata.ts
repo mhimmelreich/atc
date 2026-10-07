@@ -123,12 +123,14 @@ const COM_TYPES: Record<string, Omit<FrequencyEntry, 'label' | 'mhz'>> = {
   DIR: { kind: 'approach', rank: 1, role: 'Director' },
   A: { kind: 'approach', rank: 2, role: 'Approach' },
   RDR: { kind: 'approach', rank: 3, role: 'Approach' },
+  D: { kind: 'departure', rank: 0, role: 'Departure' },
+  DEP: { kind: 'departure', rank: 0, role: 'Departure' },
   T: { kind: 'tower', rank: 0, role: 'Tower' },
 };
 
 function loadStations(d: DatabaseSync, airportId: number): Airport['stations'] {
   const rows = d.prepare(
-    `SELECT type, frequency, name FROM com WHERE airport_id = ? AND type IN ('ARR', 'DIR', 'A', 'RDR', 'T')`,
+    `SELECT type, frequency, name FROM com WHERE airport_id = ? AND type IN ('ARR', 'DIR', 'A', 'RDR', 'D', 'DEP', 'T')`,
   ).all(airportId) as Row[];
   return pickStations(rows.map((r) => ({ ...COM_TYPES[str(r.type)], label: str(r.name), mhz: num(r.frequency) / 1000 })));
 }

@@ -28,6 +28,7 @@ import { fetchRoads } from '@/services/RoadService';
 import { airlineName, loadAirlines } from '@/game/Airlines';
 import type { TrafficMode, WatchFilter } from '@/types/live';
 import { nextLander } from '@/game/NextLander';
+import { watchExchange } from '@/game/WatchRadio';
 
 const SIDEBAR_W = 288;
 const MOBILE_BREAKPOINT = 700;
@@ -67,13 +68,17 @@ const TRAFFIC_OPTIONS: Array<{ id: TrafficMode; label: string; title: string }> 
 interface RadioPrefs {
   log: boolean;
   voice: boolean;
+  /** WATCH: Funkspruch beim Wechsel des gewählten Flugs */
+  watch: boolean;
+  /** WATCH: Überflüge zeigen */
+  transit: boolean;
 }
 
 function loadRadioPrefs(): RadioPrefs {
   try {
-    return { log: true, voice: true, ...JSON.parse(localStorage.getItem(RADIO_STORAGE) ?? '{}') };
+    return { log: true, voice: true, watch: true, transit: true, ...JSON.parse(localStorage.getItem(RADIO_STORAGE) ?? '{}') };
   } catch {
-    return { log: true, voice: true };
+    return { log: true, voice: true, watch: true, transit: true };
   }
 }
 
@@ -133,7 +138,9 @@ export function App() {
     });
   }, []);
   useEffect(() => { void loadTelephony(); }, []);
-  useEffect(() => { voice.setEnabled(radioPrefs.voice); }, [voice, radioPrefs.voice]);
+  // Im WATCH schaltet FUNK die Sprachausgabe, sonst VOICE
+  const speak = watching ? radioPrefs.watch : radioPrefs.voice;
+  useEffect(() => { voice.setEnabled(speak); }, [voice, speak]);
   useEffect(() => {
     // Browser geben Ton erst nach einer Nutzeraktion frei
     const unlock = () => voice.unlock();
@@ -145,8 +152,8 @@ export function App() {
     const fresh = gameState.radio.filter((m) => m.id > lastRadioIdRef.current);
     if (fresh.length === 0) return;
     lastRadioIdRef.current = fresh[fresh.length - 1].id;
-    if (radioPrefs.voice) fresh.forEach((m) => voice.enqueue(m));
-  }, [gameState.radio, radioPrefs.voice, voice]);
+    if (speak) fresh.forEach((m) => voice.enqueue(m));
+  }, [gameState.radio, speak, voice]);
 
   const changeSourcePref = useCallback((pref: SourcePreference) => {
     setSourcePref(pref);
@@ -278,6 +285,7 @@ export function App() {
     try { const v = localStorage.getItem(WATCH_FILTER_STORAGE); return v === 'in' || v === 'out' ? v : 'all'; } catch { return 'all'; }
   });
   useEffect(() => { engineRef.current?.setWatchFilter(watchFilter); }, [watchFilter]);
+  useEffect(() => { engineRef.current?.setWatchTransit(radioPrefs.transit); }, [radioPrefs.transit]);
   const changeWatchFilter = (f: WatchFilter) => {
     setWatchFilter(f);
     try { localStorage.setItem(WATCH_FILTER_STORAGE, f); } catch { /* nur Komfort */ }
@@ -422,6 +430,20 @@ export function App() {
   }, [watching, airport, watchFilter, gameState.watch, gameState.watchRoles, gameState.watchLanded, gameState.activeRunwayIds, gameState.selectedId]);
 
   useEffect(() => { if (watching) void loadAirlines(); }, [watching]);
+
+  // ── WATCH: Funkspruch beim Wechsel des gewählten Flugs (FUNK) ──
+  const radioSelRef = useRef<string | null>(null);
+  useEffect(() => {
+    const sel = watching ? gameState.selectedId : null;
+    if (sel === radioSelRef.current) return;
+    radioSelRef.current = sel;
+    if (!sel || !airport || !radioPrefs.watch) return;
+    voice.clear(); // alter Funkverkehr zum vorigen Flug ist nicht mehr gefragt
+    const ac = gameState.watch.find((a) => `live-${a.hex}` === sel);
+    const calls = ac ? watchExchange(ac, gameState.watchRoles[ac.hex], airport, gameState.activeRunwayIds, gameState.weather) : null;
+    if (calls) engineRef.current?.watchRadio(calls);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watching, gameState.selectedId, airport, radioPrefs.watch]);
 
   // ── WATCH: Start und Ziel des gewählten Flugs im Klartext oben in der Mitte ──
   const [airportNames, setAirportNames] = useState<Record<string, { name: string; country: string }>>({});
@@ -781,6 +803,8 @@ export function App() {
           aircraft={gameState.watch} roles={gameState.watchRoles} airport={airport} spectator={gameState.spectator}
           selectedId={gameState.selectedId} onSelect={handleSelectAircraft} traceStatus={traceStatus}
           filter={watchFilter} onFilter={changeWatchFilter}
+          transit={radioPrefs.transit} onTransit={(on) => changeRadioPrefs({ transit: on })}
+          radio={radioPrefs.watch} onRadio={(on) => changeRadioPrefs({ watch: on })}
           onFocus={(ac) => { handleSelectAircraft(`live-${ac.hex}`); engineRef.current?.centerOn(ac.lat, ac.lng); }}
         />
       ) : (<>

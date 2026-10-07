@@ -160,6 +160,7 @@ export class GameEngine {
   private liveInbound = new Map<string, Inbound>(); // hex → Anflug zum gewählten Platz
   private takenOver = new Set<string>();             // hex der übernommenen echten Flieger
   private watchFilter: WatchFilter = 'all';          // WATCH: nur Anflüge, nur Abflüge oder alle
+  private watchTransit = true;                       // WATCH: Überflüge (weder An- noch Abflug) zeigen
   private liveFrame: LiveAircraft[] = [];            // echte Flieger im letzten Bild (für Klicks)
   private liveFinals = new Map<string, { heading: number; at: number }>(); // hex → Bahnkurs, zuletzt im Endanflug gesehen
   private track: RenderOptions['track'] = null;                            // WATCH: Flugbahn des gewählten Fliegers
@@ -438,6 +439,10 @@ export class GameEngine {
         const wantOut = this.watchFilter === 'out';
         live = live.filter((ac) => { const r = roles.get(ac.hex); return !!r && !!r.out === wantOut; });
         this.liveFrame = live;
+      } else if (this.watching && !this.watchTransit) {
+        // TRANSIT aus: Überflüge ausblenden, nur An- und Abflüge bleiben
+        live = live.filter((ac) => roles.has(ac.hex));
+        this.liveFrame = live;
       }
       // Kamera folgt: Blickpunkt auf den Flieger (echt oder eigener), weg → Folgen endet
       let followId = this.state.followId;
@@ -646,6 +651,9 @@ export class GameEngine {
 
   /** WATCH: Anzeige auf Anflüge (in) oder Abflüge (out) beschränken */
   setWatchFilter(f: WatchFilter): void { this.watchFilter = f; }
+  setWatchTransit(on: boolean): void { this.watchTransit = on; }
+  /** WATCH: Funkverkehr zum gewählten echten Flug ins Funk-Log */
+  watchRadio(calls: Array<Omit<RadioMessage, 'id' | 'ts'>>): void { if (this.watching) calls.forEach((c) => this.manager.sayExternal(c)); }
 
   setSpectator(pos: Spectator | null): void {
     this.state = { ...this.state, spectator: pos };

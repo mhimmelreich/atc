@@ -1,7 +1,7 @@
 // filepath: src/ui/WatchPanel.tsx
 // WATCH: echter Verkehr zum Zuschauen – gewählter Flieger mit allen Daten, darunter alle Flieger nach Entfernung
 import { airlineName } from '@/game/Airlines';
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import type { Airport } from '@/types/airport';
 import type { LiveAircraft, LiveInbound, WatchFilter } from '@/types/live';
 import { bearingBetween, distanceNM } from '@/utils/geo';
@@ -20,6 +20,12 @@ interface Props {
   traceStatus: string | null;
   /** Nur Anflüge (IN), nur Abflüge (OUT) oder alle; filtert auch das Radar */
   filter: WatchFilter;
+  /** Überflüge (weder An- noch Abflug) zeigen */
+  transit: boolean;
+  onTransit: (on: boolean) => void;
+  /** Funksprüche beim Wechsel des gewählten Flugs */
+  radio: boolean;
+  onRadio: (on: boolean) => void;
   onFilter: (f: WatchFilter) => void;
 }
 
@@ -45,7 +51,13 @@ const vsArrow = (vs: number | null) => ((vs ?? 0) > 300 ? '↑' : (vs ?? 0) < -3
 const matches = (ac: LiveAircraft, q: string) =>
   [ac.callsign, ac.reg, ac.type, ac.route, ac.hex].some((v) => v?.toUpperCase().includes(q));
 
-export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, onSelect, onFocus, traceStatus, filter, onFilter }: Props) {
+const toggleStyle = (on: boolean, color: string): CSSProperties => ({
+  background: on ? '#0a2a1a' : 'transparent', color: on ? color : '#446644', cursor: 'pointer',
+  border: `1px solid ${on ? color : '#1a4428'}`, borderRadius: 2,
+  fontFamily: '"Courier New", monospace', fontSize: 10, padding: '0 5px', letterSpacing: 1,
+});
+
+export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, onSelect, onFocus, traceStatus, filter, onFilter, transit, onTransit, radio, onRadio }: Props) {
   const [query, setQuery] = useState('');
   const q = query.trim().toUpperCase();
   // Entfernung vom Zuschauer: GPS-Standort oder der Platz
@@ -57,7 +69,10 @@ export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, on
 
   return (
     <>
-      <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1 }}>SELECTED</div>
+      <div style={{ color: '#446644', fontSize: 10, letterSpacing: 1, display: 'flex', justifyContent: 'space-between' }}>
+        <span>SELECTED</span>
+        <button onClick={() => onRadio(!radio)} title="Funkspruch beim Wechsel des gewählten Flugs (Pilot und Lotse, hörbar)" style={toggleStyle(radio, '#00ff88')}>FUNK {radio ? 'AN' : 'AUS'}</button>
+      </div>
       {sel ? <Details ac={sel} role={roles[sel.hex]} airport={airport} spectator={spectator} /> : (
         <div style={{ color: '#446644', fontSize: 11, padding: '4px 0' }}>Flieger auf dem Radar oder in der Liste anklicken</div>
       )}
@@ -87,6 +102,9 @@ export function WatchPanel({ aircraft, roles, airport, spectator, selectedId, on
               }}
             >{f === 'all' ? label : `■ ${label}`}</button>
           ))}
+          {filter === 'all' && (
+            <button onClick={() => onTransit(!transit)} title="Überflüge (weder Anflug noch Abflug) zeigen oder ausblenden" style={toggleStyle(transit, '#8899aa')}>TRANSIT</button>
+          )}
         </span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto', flex: 1, minHeight: 110 }}>

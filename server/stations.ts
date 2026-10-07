@@ -4,7 +4,7 @@
 import type { Airport, Station } from '../src/types/airport';
 
 export interface FrequencyEntry {
-  kind: 'approach' | 'tower';
+  kind: 'approach' | 'departure' | 'tower';
   /** Vorrang innerhalb der Art, kleiner gewinnt: Arrival vor Director vor Approach */
   rank: number;
   /** Art für den Rufnamen, z. B. "Arrival" */
@@ -17,8 +17,8 @@ export interface FrequencyEntry {
 // Sprechfunk im Flugfunkband, ohne Navigations- und UHF-Frequenzen
 const VHF_MIN_MHZ = 118;
 const VHF_MAX_MHZ = 137;
-const ABBREVIATIONS: Record<string, string> = { APP: 'APPROACH', ARR: 'ARRIVAL', DIR: 'DIRECTOR', TWR: 'TOWER' };
-const FUNCTION_WORD = /^(APPROACH|ARRIVAL|DIRECTOR|RADAR|FINAL|CONTROL|TOWER)$/;
+const ABBREVIATIONS: Record<string, string> = { APP: 'APPROACH', ARR: 'ARRIVAL', DIR: 'DIRECTOR', DEP: 'DEPARTURE', TWR: 'TOWER' };
+const FUNCTION_WORD = /^(APPROACH|ARRIVAL|DIRECTOR|DEPARTURE|RADAR|FINAL|CONTROL|TOWER)$/;
 // Zusätze, die nicht zum Rufnamen gehören ("TOWER NORTH", "LCL RADAR", "APP SECONDARY")
 const NOISE = new Set(['NORTH', 'SOUTH', 'EAST', 'WEST', 'NORD', 'SÜD', 'SUD', 'OST', 'LCL', 'ALT', 'MAIN', 'PRIMARY', 'SECONDARY', 'INITIAL', 'CONTACT']);
 
@@ -41,10 +41,12 @@ export function stationName(label: string, role: string): string | undefined {
 /** Je Art die bevorzugte Stelle, bei mehreren Frequenzen die niedrigste */
 export function pickStations(entries: FrequencyEntry[]): Airport['stations'] {
   const out: NonNullable<Airport['stations']> = {};
-  for (const kind of ['approach', 'tower'] as const) {
+  for (const kind of ['approach', 'departure', 'tower'] as const) {
+    // Abflüge: eigene Departure-Frequenz, sonst die Radar-/Approach-Stelle (z. B. "Langen Radar"), nicht Arrival/Director
+    const pick = (e: FrequencyEntry) => e.kind === kind || (kind === 'departure' && e.kind === 'approach' && e.role === 'Approach');
     const best = entries
-      .filter((e) => e.kind === kind && e.mhz >= VHF_MIN_MHZ && e.mhz < VHF_MAX_MHZ)
-      .sort((a, b) => a.rank - b.rank || a.mhz - b.mhz)[0];
+      .filter((e) => pick(e) && e.mhz >= VHF_MIN_MHZ && e.mhz < VHF_MAX_MHZ)
+      .sort((a, b) => (a.kind === kind ? 0 : 10) + a.rank - ((b.kind === kind ? 0 : 10) + b.rank) || a.mhz - b.mhz)[0];
     if (!best) continue;
     const name = stationName(best.label, best.role);
     const station: Station = { ...(name ? { name } : {}), role: best.role, mhz: Math.round(best.mhz * 1000) / 1000 };
