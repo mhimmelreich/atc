@@ -141,6 +141,8 @@ export function App() {
   // Im WATCH schaltet FUNK die Sprachausgabe, sonst VOICE
   const speak = watching ? radioPrefs.watch : radioPrefs.voice;
   useEffect(() => { voice.setEnabled(speak); }, [voice, speak]);
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  useEffect(() => { voice.onBlocked = setAudioBlocked; return () => { voice.onBlocked = null; }; }, [voice]);
   useEffect(() => {
     // Browser geben Ton erst nach einer Nutzeraktion frei
     const unlock = () => voice.unlock();
@@ -914,6 +916,12 @@ export function App() {
       {watchMenu && (
         <WatchMenu menu={watchMenu} following={gameState.followId === watchMenu.id}
           onFollow={(on) => engineRef.current?.follow(on ? watchMenu.id : null)} onClose={() => setWatchMenu(null)} />
+      )}
+      {speak && audioBlocked && (
+        <button onClick={() => voice.unlock()} title="Der Browser hat den Ton angehalten"
+          style={{ position: 'fixed', bottom: 96, left: '50%', transform: 'translateX(-50%)', zIndex: 40, background: '#1a1206', border: '1px solid #ffaa00', color: '#ffcc44', fontFamily: '"Courier New", monospace', fontSize: 12, padding: '4px 10px', cursor: 'pointer' }}>
+          FUNK STUMM: HIER KLICKEN FÜR TON
+        </button>
       )}
       {gameState.followId && (
         <button onClick={() => engineRef.current?.follow(null)} title="Folgen beenden"

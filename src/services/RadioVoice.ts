@@ -52,7 +52,8 @@ export class RadioVoice {
     if (!this.enabled || navigator.userActivation?.hasBeenActive === false) return;
     try {
       this.ctx ??= new AudioContext();
-      if (this.ctx.state === 'suspended') void this.ctx.resume();
+      if (this.ctx.state !== 'running') void this.ctx.resume().then(() => this.setBlocked(this.ctx?.state !== 'running'));
+      else this.setBlocked(false);
     } catch { /* kein WebAudio: Browser-Sprachausgabe */ }
   }
 
@@ -87,11 +88,32 @@ export class RadioVoice {
   private async wake(): Promise<AudioContext | null> {
     if (!this.ctx) this.unlock();
     const ctx = this.ctx;
-    if (!ctx) return null;
+    if (!ctx) { this.setBlocked(true); return null; }
     if (ctx.state !== 'running') {
       try { await Promise.race([ctx.resume(), sleep(1500)]); } catch { /* bleibt angehalten */ }
     }
-    return this.running();
+    // Lässt sich der alte nicht wecken: neuer Kontext (nach einer früheren Nutzeraktion erlaubt)
+    if (ctx.state !== 'running' && this.ctx === ctx && navigator.userActivation?.hasBeenActive !== false) {
+      try {
+        void ctx.close().catch(() => undefined);
+        this.ctx = new AudioContext();
+        this.noise = null;
+        this.clicks.clear();
+        await Promise.race([this.ctx.resume(), sleep(1500)]);
+      } catch { /* kein WebAudio */ }
+    }
+    const running = this.running();
+    this.setBlocked(!running);
+    return running;
+  }
+
+  /** Meldet, ob der Browser den Ton blockiert (dann hilft ein Klick in die Seite) */
+  onBlocked: ((blocked: boolean) => void) | null = null;
+  private blocked = false;
+  private setBlocked(b: boolean): void {
+    if (b === this.blocked) return;
+    this.blocked = b;
+    this.onBlocked?.(b);
   }
 
   private load(ctx: AudioContext, msg: RadioMessage): Promise<AudioBuffer | null> {
@@ -178,7 +200,11 @@ export class RadioVoice {
     voice.start(t0);
     noise.stop(end + 0.1);
     return new Promise((resolve) => {
+      // Falls der Ton-Kontext hängt und onended nie kommt: Warteschlange trotzdem weiterlaufen lassen
+      const guard = setTimeout(() => noise.onended?.(new Event('ended')), (end - ctx.currentTime + 1.5) * 1000);
       noise.onended = () => {
+        clearTimeout(guard);
+        noise.onended = null;
         this.stopCurrent = null;
         out.disconnect();
         resolve();
