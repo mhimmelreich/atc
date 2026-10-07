@@ -6,7 +6,7 @@ const OVERRIDES: Record<string, string> = {
   SXS: 'SunExpress', BCS: 'DHL (European Air Transport)', DHK: 'DHL Air', GEC: 'Lufthansa Cargo',
   CLH: 'Lufthansa CityLine', LHX: 'Lufthansa City Airlines', DLA: 'Air Dolomiti', ITY: 'ITA Airways',
   EJU: 'easyJet Europe', EZS: 'easyJet Switzerland', EDW: 'Edelweiss', WMT: 'Wizz Air Malta', WUK: 'Wizz Air UK',
-  DLH: 'Lufthansa', EWG: 'Eurowings', DJT: 'Discover Airlines', OCN: 'Discover Airlines',
+  DLH: 'Lufthansa', EWG: 'Eurowings', OCN: 'Discover Airlines',
 };
 
 let table: Record<string, string> = { ...OVERRIDES };
