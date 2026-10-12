@@ -27,7 +27,8 @@ export interface Favorite {
 interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; vector: boolean; selected: string | null }
 
 const FAV_KEY = 'atc-favorites-v1';
-const PREF_KEY = 'atc-favradar-v1';
+const PREF_KEY = 'atc-favradar-v2';
+const PREF_KEY_V1 = 'atc-favradar-v1'; // v1: HÖREN war standardmäßig aus
 const MAX_RADIUS = 100;
 const HISTORY = 6;           // Verlaufspunkte je Ziel (wie auf echten Radarschirmen)
 const VECTOR_MIN = 1;        // Geschwindigkeitsvektor: Position in 1 min
@@ -42,7 +43,12 @@ function loadFavs(): Favorite[] {
   try { const v = JSON.parse(localStorage.getItem(FAV_KEY) ?? '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
 }
 function loadPrefs(): Prefs {
-  try { return { layout: 'single', ga: true, hear: false, vector: false, selected: null, ...JSON.parse(localStorage.getItem(PREF_KEY) ?? '{}') }; } catch { return { layout: 'single', ga: true, hear: false, vector: false, selected: null }; }
+  try {
+    const v2 = localStorage.getItem(PREF_KEY);
+    const stored = JSON.parse(v2 ?? localStorage.getItem(PREF_KEY_V1) ?? '{}');
+    if (!v2) delete stored.hear;
+    return { layout: 'single', ga: true, hear: true, vector: false, selected: null, ...stored };
+  } catch { return { layout: 'single', ga: true, hear: true, vector: false, selected: null }; }
 }
 function save(key: string, v: unknown) { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* privates Fenster */ } }
 
@@ -120,7 +126,7 @@ function Scope({ fav, ga, hear, vector, pollMs, compact, onSelectFav }: {
     if (!el) return;
     const ro = new ResizeObserver(() => {
       const w = el.clientWidth;
-      const h = compact ? w : Math.min(w, window.innerHeight - 140);
+      const h = compact ? w : Math.min(w, window.innerHeight - 110);
       setSize(Math.max(200, Math.floor(Math.min(w, h))));
     });
     ro.observe(el);
@@ -257,7 +263,7 @@ function Scope({ fav, ga, hear, vector, pollMs, compact, onSelectFav }: {
 
     // Nordpfeil oben links
     {
-      const nx = 22, ny = 30;
+      const nx = 14, ny = compact ? 34 : 38;
       ctx.fillStyle = '#9fd8b0'; ctx.strokeStyle = '#9fd8b0'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(nx, ny - 14); ctx.lineTo(nx + 6, ny + 4); ctx.lineTo(nx, ny); ctx.closePath(); ctx.fill();
       ctx.beginPath(); ctx.moveTo(nx, ny - 14); ctx.lineTo(nx - 6, ny + 4); ctx.lineTo(nx, ny); ctx.closePath(); ctx.stroke();
@@ -345,30 +351,41 @@ function Scope({ fav, ga, hear, vector, pollMs, compact, onSelectFav }: {
   };
 
   const age = updatedAt === null ? null : Math.round((now - updatedAt) / 1000);
+  // Zusatzinfos in die vier Ecken des Quadrats, die der Kreis frei lässt
+  const fs = compact ? 10 : 11;
+  const cornerW = Math.round(size * 0.34);
+  const corner = (pos: CSSProperties): CSSProperties => ({
+    position: 'absolute', maxWidth: cornerW, fontSize: fs, lineHeight: 1.3, color: C.text, ...pos,
+  });
   return (
-    <div ref={wrapRef} style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', fontSize: 11, color: C.text, marginBottom: 2 }}>
-        <span style={{ color: '#ff9ed8', fontWeight: 'bold', cursor: onSelectFav ? 'pointer' : undefined }} onClick={onSelectFav}>★ {fav.name}</span>
-        <span style={{ color: error ? '#ffaa00' : C.text }}>
-          {visible.length} AC · {fav.radiusNm} NM · {fav.altMin}–{fav.altMax} ft · {error ? 'keine Daten' : age === null ? 'lädt…' : `${age} s`}
-        </span>
-      </div>
-      <canvas ref={canvasRef} onClick={onClick} style={{ width: size, height: size, cursor: 'crosshair' }} />
-      {hear && <HearPanel heard={heard} traffic={traffic} visible={new Set(visible.map((v) => v.a.hex))} wx={wx} field={metarField?.ident} compact={compact} onSelect={setSelHex} />}
-      {selected && <Details v={selected} fav={fav} onClose={() => setSelHex(null)} />}
-      {!compact && !selected && visible.length > 0 && (
-        <div style={{ width: '100%', maxWidth: size, fontSize: 11, color: C.text, marginTop: 4 }}>
-          {visible.slice(0, 12).map(({ a, dist }) => (
-            <div key={a.hex} onClick={() => setSelHex(a.hex)} style={{ display: 'flex', gap: 8, cursor: 'pointer', color: isGa(a) ? C.ga : C.airline }}>
-              <span style={{ width: 70 }}>{a.callsign}</span>
-              <span style={{ width: 44 }}>{a.type ?? ''}</span>
-              <span style={{ width: 62 }}>{altText(a)}</span>
-              <span style={{ width: 54 }}>{dist.toFixed(1)} NM</span>
-              <span>{String(Math.round(bearingBetween(fav.lat, fav.lng, a.lat, a.lng))).padStart(3, '0')}°</span>
+    <div ref={wrapRef} style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+      <div style={{ position: 'relative', width: size, height: size }}>
+        <canvas ref={canvasRef} onClick={onClick} style={{ width: size, height: size, cursor: 'crosshair', display: 'block' }} />
+        {/* oben links: Name (Nordpfeil darunter im Bild) */}
+        <div style={corner({ left: 0, top: 0 })}>
+          <span style={{ color: '#ff9ed8', fontWeight: 'bold', cursor: onSelectFav ? 'pointer' : undefined }} onClick={onSelectFav}>★ {fav.name}</span>
+        </div>
+        {/* oben rechts: Stand */}
+        <div style={corner({ right: 0, top: 0, textAlign: 'right' })}>
+          <div style={{ color: C.airline }}>{visible.length} AC</div>
+          <div>{fav.radiusNm} NM · {fav.altMin}–{fav.altMax} ft</div>
+          <div style={{ color: error ? '#ffaa00' : C.text }}>{error ? 'keine Daten' : age === null ? 'lädt…' : `vor ${age} s`}</div>
+        </div>
+        {/* unten links: Hören */}
+        {hear && (
+          <div style={corner({ left: 0, bottom: 0 })}>
+            <HearPanel heard={heard} traffic={traffic} visible={new Set(visible.map((v) => v.a.hex))} wx={wx} field={metarField?.ident} compact={compact} onSelect={setSelHex} />
+          </div>
+        )}
+        {/* unten rechts: gewählter Flieger, sonst die nächsten */}
+        <div style={corner({ right: 0, bottom: 0, textAlign: 'right' })}>
+          {selected ? <Details v={selected} fav={fav} onClose={() => setSelHex(null)} /> : !compact && visible.slice(0, 6).map(({ a, dist }) => (
+            <div key={a.hex} onClick={() => setSelHex(a.hex)} style={{ cursor: 'pointer', color: isGa(a) ? C.ga : C.airline, whiteSpace: 'nowrap' }}>
+              {a.callsign} {altText(a)} {dist.toFixed(1)} NM {String(Math.round(bearingBetween(fav.lat, fav.lng, a.lat, a.lng))).padStart(3, '0')}°
             </div>
           ))}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -378,37 +395,41 @@ function HearPanel({ heard, traffic, visible, wx, field, compact, onSelect }: {
 }) {
   const byHex = new Map(traffic.map((a) => [a.hex, a]));
   const top = heard.filter((h) => h.dba >= AUDIBLE_DBA).slice(0, compact ? 1 : 3);
-  const wind = !wx ? 'Wind unbekannt' : wx.windDir === null ? `Wind umlaufend ${wx.windKt} kt` : `Wind ${String(wx.windDir).padStart(3, '0')}°/${wx.windKt} kt`;
+  const wind = !wx ? 'Wind ?' : wx.windDir === null ? `Wind VRB/${wx.windKt} kt` : `Wind ${String(wx.windDir).padStart(3, '0')}°/${wx.windKt} kt`;
   return (
-    <div style={{ width: '100%', maxWidth: 420, fontSize: 11, color: C.text, marginTop: 4 }}>
-      <div style={{ color: C.hear }}>HÖREN · {wind}{wx && field ? ` (${field})` : ''}</div>
-      {top.length === 0 && <div>Vermutlich ist gerade kein Flieger zu hören (alle unter {AUDIBLE_DBA} dB(A)).</div>}
+    <>
+      <div style={{ color: C.hear }}>♪ HÖREN · {wind}{wx && field ? ` ${field}` : ''}</div>
+      {top.length === 0 && <div>kein Flieger hörbar (&lt;{AUDIBLE_DBA} dB(A))</div>}
       {top.map((h, i) => {
         const a = byHex.get(h.hex);
         return (
           <div key={h.hex} onClick={() => onSelect(h.hex)} style={{ cursor: 'pointer', color: i === 0 ? C.hear : C.text }}>
-            {i === 0 ? '♪ ' : '  '}{a?.callsign ?? h.hex} {a?.type ?? ''} · ≈{Math.round(h.dba)} dB(A) · {Math.round(h.p * 100)} % · Schall {Math.round(h.delayS)} s unterwegs
-            {!visible.has(h.hex) && ' · außerhalb Anzeige'}
+            {a?.callsign ?? h.hex} {a?.type ?? ''} ≈{Math.round(h.dba)} dB(A) {Math.round(h.p * 100)} %
+            {i === 0 && <span> · Schall {Math.round(h.delayS)} s alt</span>}
+            {!visible.has(h.hex) && ' · nicht im Bild'}
           </div>
         );
       })}
-    </div>
+    </>
   );
 }
 
 function Details({ v, fav, onClose }: { v: { a: LiveAircraft; p: { lat: number; lng: number }; dist: number }; fav: Favorite; onClose: () => void }) {
   const { a, p, dist } = v;
   const airline = airlineName(a.callsign);
-  const row = (k: string, val: string | null | undefined) => val ? <div><span style={{ color: '#4f8a60', display: 'inline-block', width: 70 }}>{k}</span>{val}</div> : null;
+  const row = (k: string, val: string | null | undefined) => val ? <div><span style={{ color: '#4f8a60' }}>{k} </span>{val}</div> : null;
   return (
-    <div style={{ width: '100%', maxWidth: 420, fontSize: 12, color: '#cde', background: '#06140c', border: '1px solid #1a4428', padding: 8, marginTop: 6, position: 'relative' }}>
-      <button onClick={onClose} style={{ ...BTN, position: 'absolute', right: 6, top: 6, padding: '0 6px' }}>✕</button>
-      <div style={{ color: C.sel, fontWeight: 'bold', fontSize: 14 }}>{a.callsign}{airline && <span style={{ color: '#9fc8e0', fontWeight: 'normal' }}> · {airline}</span>}</div>
+    <div style={{ color: '#cde' }}>
+      <div style={{ color: C.sel, fontWeight: 'bold' }}>
+        {a.callsign}{airline && <span style={{ color: '#9fc8e0', fontWeight: 'normal' }}> · {airline}</span>}
+        <span onClick={onClose} style={{ cursor: 'pointer', color: '#4f8a60', marginLeft: 6 }} title="Schließen">✕</span>
+      </div>
       {row('ROUTE', a.route?.replace(/-/g, ' → '))}
       {row('TYP', [a.type, a.category ? CATEGORY[a.category] ?? a.category : null].filter(Boolean).join(' · '))}
       {row('KENNZ.', a.reg)}
-      {row('HÖHE', `${altText(a)}${a.vs !== null && Math.abs(a.vs) >= 100 ? ` ${a.vs > 0 ? '↑' : '↓'} ${Math.abs(Math.round(a.vs / 100) * 100)} ft/min` : ''}${a.selAltFt ? ` · gewählt ${a.selAltFt} ft` : ''}`)}
-      {row('GS / KURS', `${a.gs ?? '–'} kt · ${a.track !== null ? String(Math.round(a.track)).padStart(3, '0') + '°' : '–'}`)}
+      {row('HÖHE', `${altText(a)}${a.vs !== null && Math.abs(a.vs) >= 100 ? ` ${a.vs > 0 ? '↑' : '↓'}${Math.abs(Math.round(a.vs / 100) * 100)} ft/min` : ''}`)}
+      {row('GEWÄHLT', a.selAltFt ? `${a.selAltFt} ft` : null)}
+      {row('GS/KURS', `${a.gs ?? '–'} kt · ${a.track !== null ? String(Math.round(a.track)).padStart(3, '0') + '°' : '–'}`)}
       {row('SQUAWK', a.squawk ? `${a.squawk}${EMERGENCY[a.squawk] ? ` (${EMERGENCY[a.squawk]})` : ''}` : null)}
       {row('VON ★', `${dist.toFixed(1)} NM · ${String(Math.round(bearingBetween(fav.lat, fav.lng, p.lat, p.lng))).padStart(3, '0')}°`)}
     </div>
