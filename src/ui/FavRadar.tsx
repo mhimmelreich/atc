@@ -9,6 +9,7 @@ import { estimateHearing, AUDIBLE_DBA, type HearResult } from '@/game/Hearing';
 import type { Weather } from '@/types/weather';
 import { airlineName } from '@/game/Airlines';
 import { drawPlanform, planform } from '@/game/aircraftPlanform';
+import { regCountry, typeName } from '@/game/aircraftInfo';
 import type { LiveAircraft } from '@/types/live';
 import { bearingBetween, destinationPoint, distanceNM } from '@/utils/geo';
 
@@ -117,6 +118,7 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [error, setError] = useState(false);
   const [selHex, setSelHex] = useState<string | null>(null);
+  const [info, setInfo] = useState<InfoRef | null>(null);
   // Flugbahn des gewählten Flugs seit dem Start (adsb.lol-Trace), alle 30 s erneuert
   const [trace, setTrace] = useState<TracePoint[]>([]);
   useEffect(() => {
@@ -398,6 +400,7 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
     <div ref={wrapRef} style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
       <div style={{ position: 'relative', width: size, height: size }}>
         <canvas ref={canvasRef} onClick={onClick} style={{ width: size, height: size, cursor: 'crosshair', display: 'block' }} />
+        {info && <InfoModal info={info} fav={fav} onClose={() => setInfo(null)} />}
         {/* oben links: Name (Nordpfeil darunter im Bild) */}
         <div style={corner({ left: 0, top: 0 })}>
           <span style={{ color: '#ff9ed8', fontWeight: 'bold', cursor: onSelectFav ? 'pointer' : undefined }} onClick={onSelectFav}>★ {fav.name}</span>
@@ -416,7 +419,7 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
         )}
         {/* unten rechts: gewählter Flieger, sonst die nächsten */}
         <div style={corner({ right: 0, bottom: 0, textAlign: 'right' })}>
-          {selected ? <Details v={selected} fav={fav} onClose={() => setSelHex(null)} /> : !compact && visible.slice(0, 6).map(({ a, dist }) => (
+          {selected ? <Details v={selected} fav={fav} onClose={() => setSelHex(null)} onInfo={setInfo} /> : !compact && visible.slice(0, 6).map(({ a, dist }) => (
             <div key={a.hex} onClick={() => setSelHex(a.hex)} style={{ cursor: 'pointer', color: isGa(a) ? C.ga : C.airline, whiteSpace: 'nowrap' }}>
               {a.callsign} {altText(a)} {dist.toFixed(1)} NM {String(Math.round(bearingBetween(fav.lat, fav.lng, a.lat, a.lng))).padStart(3, '0')}°
             </div>
@@ -451,24 +454,122 @@ function HearPanel({ heard, traffic, visible, wx, field, compact, onSelect }: {
   );
 }
 
-function Details({ v, fav, onClose }: { v: { a: LiveAircraft; p: { lat: number; lng: number }; dist: number }; fav: Favorite; onClose: () => void }) {
+type InfoRef = { kind: 'type' | 'reg' | 'airport'; value: string; a: LiveAircraft };
+
+function Details({ v, fav, onClose, onInfo }: { v: { a: LiveAircraft; p: { lat: number; lng: number }; dist: number }; fav: Favorite; onClose: () => void; onInfo: (i: InfoRef) => void }) {
   const { a, p, dist } = v;
   const airline = airlineName(a.callsign);
-  const row = (k: string, val: string | null | undefined) => val ? <div><span style={{ color: '#4f8a60' }}>{k} </span>{val}</div> : null;
+  const link = (kind: InfoRef['kind'], value: string) => (
+    <span onClick={() => onInfo({ kind, value, a })} style={{ cursor: 'pointer', textDecoration: 'underline dotted', textUnderlineOffset: 2 }} title="Info">{value}</span>
+  );
+  const rows: Array<[string, React.ReactNode]> = [];
+  if (a.route) {
+    const codes = a.route.split('-');
+    rows.push(['ROUTE', <>{codes.map((c, i) => <span key={i}>{i > 0 && ' → '}{link('airport', c)}</span>)}</>]);
+  }
+  if (a.type) rows.push(['TYP', link('type', a.type)]);
+  if (a.category) rows.push(['KLASSE', CATEGORY[a.category] ?? a.category]);
+  if (a.reg) rows.push(['KENNZ.', link('reg', a.reg)]);
+  rows.push(['HÖHE', altText(a)]);
+  if (a.vs !== null && Math.abs(a.vs) >= 100) rows.push(['RATE', `${a.vs > 0 ? '↑' : '↓'} ${Math.abs(Math.round(a.vs / 100) * 100)} ft/min`]);
+  if (a.selAltFt) rows.push(['GEWÄHLT', `${a.selAltFt} ft`]);
+  rows.push(['GS', a.gs !== null ? `${Math.round(a.gs)} kt` : '–']);
+  rows.push(['KURS', a.track !== null ? `${String(Math.round(a.track)).padStart(3, '0')}°` : '–']);
+  if (a.squawk) rows.push(['SQUAWK', `${a.squawk}${EMERGENCY[a.squawk] ? ` ${EMERGENCY[a.squawk]}` : ''}`]);
+  rows.push(['VON ★', `${dist.toFixed(1)} NM · ${String(Math.round(bearingBetween(fav.lat, fav.lng, p.lat, p.lng))).padStart(3, '0')}°`]);
   return (
-    <div style={{ color: '#cde' }}>
-      <div style={{ color: C.sel, fontWeight: 'bold' }}>
-        {a.callsign}{airline && <span style={{ color: '#9fc8e0', fontWeight: 'normal' }}> · {airline}</span>}
-        <span onClick={onClose} style={{ cursor: 'pointer', color: '#4f8a60', marginLeft: 6 }} title="Schließen">✕</span>
+    <div style={{ color: '#cde', textAlign: 'left' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, color: C.sel, fontWeight: 'bold' }}>
+        <span>{a.callsign}{airline && <span style={{ color: '#9fc8e0', fontWeight: 'normal' }}> · {airline}</span>}</span>
+        <span onClick={onClose} style={{ cursor: 'pointer', color: '#4f8a60' }} title="Schließen">✕</span>
       </div>
-      {row('ROUTE', a.route?.replace(/-/g, ' → '))}
-      {row('TYP', [a.type, a.category ? CATEGORY[a.category] ?? a.category : null].filter(Boolean).join(' · '))}
-      {row('KENNZ.', a.reg)}
-      {row('HÖHE', `${altText(a)}${a.vs !== null && Math.abs(a.vs) >= 100 ? ` ${a.vs > 0 ? '↑' : '↓'}${Math.abs(Math.round(a.vs / 100) * 100)} ft/min` : ''}`)}
-      {row('GEWÄHLT', a.selAltFt ? `${a.selAltFt} ft` : null)}
-      {row('GS/KURS', `${a.gs ?? '–'} kt · ${a.track !== null ? String(Math.round(a.track)).padStart(3, '0') + '°' : '–'}`)}
-      {row('SQUAWK', a.squawk ? `${a.squawk}${EMERGENCY[a.squawk] ? ` (${EMERGENCY[a.squawk]})` : ''}` : null)}
-      {row('VON ★', `${dist.toFixed(1)} NM · ${String(Math.round(bearingBetween(fav.lat, fav.lng, p.lat, p.lng))).padStart(3, '0')}°`)}
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10 }}>
+        {rows.map(([k, val]) => (
+          <div key={k} style={{ display: 'contents' }}>
+            <span style={{ color: '#4f8a60' }}>{k}</span>
+            <span style={{ textAlign: 'right' }}>{val}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface AirportInfo {
+  icao: string; iata: string | null; name: string; city: string | null; country: string | null; type: string; scheduled: boolean;
+  lat: number; lng: number; elevationFt: number | null; wikipedia: string | null; home: string | null;
+  runways: Array<{ name: string; lengthM: number | null; widthM: number | null; surface: string | null; lighted: boolean }>;
+  freqs: Array<{ type: string; name: string; mhz: number }>;
+}
+const AP_TYPE: Record<string, string> = { large_airport: 'Großflughafen', medium_airport: 'Regionalflughafen', small_airport: 'Flugplatz', heliport: 'Hubschrauberlandeplatz', seaplane_base: 'Wasserflugplatz' };
+
+/** Info in der Bildschirmmitte: Flugzeugtyp, Kennzeichen oder Flughafen */
+function InfoModal({ info, fav, onClose }: { info: InfoRef; fav: Favorite; onClose: () => void }) {
+  const [ap, setAp] = useState<AirportInfo | null | 'error'>(null);
+  useEffect(() => {
+    if (info.kind !== 'airport') return;
+    setAp(null);
+    fetch(`${import.meta.env.BASE_URL}api/opendata/info/${info.value}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error())))
+      .then((d: AirportInfo) => setAp(d)).catch(() => setAp('error'));
+  }, [info.kind, info.value]);
+  useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }; window.addEventListener('keydown', k, true); return () => window.removeEventListener('keydown', k, true); }, [onClose]);
+
+  const rows: Array<[string, React.ReactNode]> = [];
+  let title = info.value;
+  const ext = (href: string, text: string) => <a href={href} target="_blank" rel="noreferrer" style={{ color: '#78d7ff' }}>{text}</a>;
+  if (info.kind === 'type') {
+    const pf = planform(info.value, info.a.category);
+    title = typeName(info.value) ?? info.value;
+    rows.push(['ICAO-TYP', info.value]);
+    rows.push(['LÄNGE', `${pf.length.toFixed(1)} m`]);
+    rows.push([pf.kind === 'heli' ? 'ROTOR' : 'SPANNWEITE', `${pf.span.toFixed(1)} m`]);
+    const eng = { jet: 'Strahltriebwerke', turboprop: 'Turboprop', piston1: 'Kolbenmotor', piston2: 'Kolbenmotoren', heli: 'Turbine/Kolben', glider: 'ohne Motor' }[pf.kind];
+    rows.push(['ANTRIEB', pf.engines > 0 ? `${pf.engines} × ${eng}${pf.rearEngines ? ' (hinten)' : ''}` : eng]);
+    if (info.a.category) rows.push(['ADS-B', `${info.a.category} · ${CATEGORY[info.a.category] ?? ''}`]);
+    rows.push(['MEHR', ext(`https://de.wikipedia.org/w/index.php?search=${encodeURIComponent(typeName(info.value) ?? info.value)}`, 'Wikipedia')]);
+  } else if (info.kind === 'reg') {
+    title = info.value;
+    rows.push(['LAND', regCountry(info.value) ?? '?']);
+    rows.push(['TYP', typeName(info.a.type) ?? info.a.type ?? '?']);
+    const airline = airlineName(info.a.callsign);
+    if (airline) rows.push(['BETREIBER', airline]);
+    rows.push(['RUFZEICHEN', info.a.callsign]);
+    rows.push(['ICAO-ADRESSE', info.a.hex.toUpperCase()]);
+    rows.push(['FOTOS', ext(`https://www.planespotters.net/search?q=${encodeURIComponent(info.value)}`, 'planespotters.net')]);
+    rows.push(['VERLAUF', ext(`https://globe.adsb.lol/?icao=${info.a.hex}`, 'globe.adsb.lol')]);
+  } else if (ap === null) {
+    rows.push(['', 'lädt…']);
+  } else if (ap === 'error') {
+    rows.push(['', 'keine Daten zu diesem Flughafen']);
+  } else {
+    title = ap.name;
+    rows.push(['ICAO / IATA', `${ap.icao}${ap.iata ? ` / ${ap.iata}` : ''}`]);
+    if (ap.city || ap.country) rows.push(['ORT', [ap.city, ap.country].filter(Boolean).join(', ')]);
+    rows.push(['ART', `${AP_TYPE[ap.type] ?? ap.type}${ap.scheduled ? ', Linienverkehr' : ''}`]);
+    if (ap.elevationFt !== null) rows.push(['HÖHE', `${ap.elevationFt} ft`]);
+    rows.push(['VON ★', `${Math.round(distanceNM(fav.lat, fav.lng, ap.lat, ap.lng))} NM · ${String(Math.round(bearingBetween(fav.lat, fav.lng, ap.lat, ap.lng))).padStart(3, '0')}°`]);
+    for (const r of ap.runways) rows.push([`BAHN ${r.name}`, [r.lengthM && `${r.lengthM} m`, r.widthM && `× ${r.widthM} m`, r.surface].filter(Boolean).join(' ')]);
+    for (const f of ap.freqs.slice(0, 6)) rows.push([f.type, `${f.mhz.toFixed(3)} ${f.name ?? ''}`]);
+    if (ap.wikipedia) rows.push(['MEHR', ext(ap.wikipedia, 'Wikipedia')]);
+  }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ minWidth: 280, maxWidth: 440, width: '100%', maxHeight: '80vh', overflowY: 'auto', background: '#06140c', border: '1px solid #1a5a30', padding: 14, fontSize: 12, color: '#cde', fontFamily: '"Courier New", monospace' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+          <span style={{ color: C.sel, fontWeight: 'bold', fontSize: 14 }}>{title}</span>
+          <span onClick={onClose} style={{ cursor: 'pointer', color: '#4f8a60' }} title="Schließen (Esc)">✕</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 14, rowGap: 2 }}>
+          {rows.map(([k, val], i) => (
+            <div key={i} style={{ display: 'contents' }}>
+              <span style={{ color: '#4f8a60' }}>{k}</span>
+              <span style={{ textAlign: 'right' }}>{val}</span>
+            </div>
+          ))}
+        </div>
+        {info.kind === 'airport' && <div style={{ fontSize: 10, color: '#3a6a4a', marginTop: 8 }}>Daten: OurAirports (gemeinfrei)</div>}
+      </div>
     </div>
   );
 }

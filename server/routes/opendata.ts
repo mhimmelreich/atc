@@ -279,6 +279,39 @@ router.get('/names', async (req, res) => {
   res.json(names);
 });
 
+// Steckbrief eines Flughafens (Favoriten-Radar, Klick auf die Route)
+router.get('/info/:icao', async (req, res) => {
+  const icao = req.params.icao.toUpperCase();
+  if (!/^[A-Z0-9]{3,4}$/.test(icao)) { res.status(400).json({ error: 'Ungültiger ICAO-Code' }); return; }
+  let d: OpenData;
+  try {
+    d = await loadData();
+  } catch {
+    res.status(503).json({ error: 'Flughafendaten nicht verfügbar' });
+    return;
+  }
+  const a = d.airports.get(icao);
+  if (!a) { res.status(404).json({ error: `${icao} nicht gefunden` }); return; }
+  const runways = (d.runways.get(a.ident) ?? []).map((r) => ({
+    name: [r.le_ident, r.he_ident].filter(Boolean).join('/'),
+    lengthM: num(r.length_ft) !== null ? Math.round(num(r.length_ft)! * FT_TO_M) : null,
+    widthM: num(r.width_ft) !== null ? Math.round(num(r.width_ft)! * FT_TO_M) : null,
+    surface: r.surface || null,
+    lighted: r.lighted === '1',
+  }));
+  const freqs = (d.frequencies.get(a.ident) ?? [])
+    .map((f) => ({ type: f.type, name: f.description, mhz: num(f.frequency_mhz) }))
+    .filter((f) => f.mhz !== null)
+    .slice(0, 12);
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.json({
+    icao: a.icao_code || a.gps_code || a.ident, iata: a.iata_code || null, name: a.name, city: a.municipality || null,
+    country: a.iso_country || null, type: a.type, scheduled: a.scheduled_service === 'yes',
+    lat: Number(a.latitude_deg), lng: Number(a.longitude_deg), elevationFt: num(a.elevation_ft),
+    wikipedia: a.wikipedia_link || null, home: a.home_link || null, runways, freqs,
+  });
+});
+
 // Flugplätze mit Bahnen im Umkreis (Favoriten-Radar): [Kennung, Name, lat, lon, Art, Bahnen [lat1, lon1, lat2, lon2, Bezeichnung], Höhe ft]
 const AREA_TYPES: Record<string, string> = { large_airport: 'L', medium_airport: 'M', small_airport: 'S' };
 router.get('/area', async (req, res) => {
