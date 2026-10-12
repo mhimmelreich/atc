@@ -507,9 +507,18 @@ function HearPanel({ heard, traffic, visible, wx, field, compact, onSelect }: {
   const byHex = new Map(traffic.map((a) => [a.hex, a]));
   const top = heard.filter((h) => h.dba >= AUDIBLE_DBA).slice(0, compact ? 1 : 3);
   const wind = !wx ? 'Wind ?' : wx.windDir === null ? `Wind VRB/${wx.windKt} kt` : `Wind ${String(wx.windDir).padStart(3, '0')}°/${wx.windKt} kt`;
+  const gust = wx?.gustKt ? ` G${wx.gustKt}` : '';
+  const qnh = wx?.qnh ? `QNH ${Math.round(wx.qnh)} hPa${wx.altimeterInHg ? ` (${wx.altimeterInHg.toFixed(2)} inHg)` : ''}` : 'QNH ?';
   return (
     <>
-      <div style={{ color: C.hear }}>♪ HÖREN · {wind}{wx && field ? ` ${field}` : ''}</div>
+      <div style={{ color: C.hear }}>♪ HÖREN</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '2px 0' }}>
+        <WindRose wx={wx} size={compact ? 30 : 40} />
+        <div>
+          <div>{wind}{gust}{wx && field ? ` · ${field}` : ''}</div>
+          <div>{qnh}</div>
+        </div>
+      </div>
       {top.length === 0 && <div>kein Flieger hörbar (&lt;{AUDIBLE_DBA} dB(A))</div>}
       {top.map((h, i) => {
         const a = byHex.get(h.hex);
@@ -522,6 +531,40 @@ function HearPanel({ heard, traffic, visible, wx, field, compact, onSelect }: {
         );
       })}
     </>
+  );
+}
+
+/** Windrose: Ring mit Himmelsrichtungen, Pfeil fliegt mit dem Wind (von der gemeldeten Richtung zur Mitte und weiter) */
+function WindRose({ wx, size }: { wx: Weather | null; size: number }) {
+  const r = size / 2 - 1, c = size / 2;
+  const ticks = Array.from({ length: 12 }, (_, i) => i * 30);
+  const dir = wx?.windDir ?? null;
+  const calm = !wx || wx.windKt === 0;
+  const len = r * 0.85;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flex: 'none' }}>
+      <circle cx={c} cy={c} r={r} fill="none" stroke={C.rose} strokeWidth={1} />
+      {ticks.map((t) => {
+        const a = (t * Math.PI) / 180, k = t % 90 === 0 ? 0.72 : 0.85;
+        return <line key={t} x1={c + Math.sin(a) * r * k} y1={c - Math.cos(a) * r * k} x2={c + Math.sin(a) * r} y2={c - Math.cos(a) * r} stroke={C.rose} strokeWidth={1} />;
+      })}
+      <text x={c} y={c - r * 0.42} fill={C.text} fontSize={size * 0.22} textAnchor="middle" dominantBaseline="middle">N</text>
+      {calm ? <circle cx={c} cy={c} r={2} fill={C.text} />
+        : dir === null ? <circle cx={c} cy={c} r={r * 0.4} fill="none" stroke={C.hear} strokeDasharray="2 2" />
+        : (() => {
+          // Pfeil von der Windherkunft durch die Mitte (zeigt, wohin der Wind weht)
+          const a = (dir * Math.PI) / 180;
+          const x0 = c + Math.sin(a) * len, y0 = c - Math.cos(a) * len, x1 = c - Math.sin(a) * len, y1 = c + Math.cos(a) * len;
+          const h = size * 0.16, b = Math.atan2(y1 - y0, x1 - x0);
+          return (
+            <g stroke={C.hear} fill={C.hear} strokeWidth={1.6}>
+              <line x1={x0} y1={y0} x2={x1} y2={y1} />
+              <polygon points={`${x1},${y1} ${x1 - h * Math.cos(b - 0.45)},${y1 - h * Math.sin(b - 0.45)} ${x1 - h * Math.cos(b + 0.45)},${y1 - h * Math.sin(b + 0.45)}`} stroke="none" />
+              <circle cx={x0} cy={y0} r={1.8} stroke="none" />
+            </g>
+          );
+        })()}
+    </svg>
   );
 }
 
