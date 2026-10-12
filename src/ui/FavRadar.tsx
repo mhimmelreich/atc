@@ -2,7 +2,7 @@
 // Favoriten-Radar: eigene Orte (GPS oder Koordinaten) speichern und für jeden ein rundes Radarbild
 // in Draufsicht zeigen, Nord oben, mit einstellbarem Umkreis und Höhenband. Echtverkehr von adsb.lol (ODbL).
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { fetchLiveTraffic } from '@/services/LiveTrafficService';
+import { fetchLiveTraffic, fetchTrace, type TracePoint } from '@/services/LiveTrafficService';
 import { fetchAreaAirports, type AreaAirport } from '@/services/AirportDataService';
 import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
 import { estimateHearing, AUDIBLE_DBA, type HearResult } from '@/game/Hearing';
@@ -24,7 +24,7 @@ export interface Favorite {
   altMax: number;
 }
 
-interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; selected: string | null }
+interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; trail: boolean; trailAlpha: number; selected: string | null }
 
 const FAV_KEY = 'atc-favorites-v1';
 const PREF_KEY = 'atc-favradar-v2';
@@ -47,8 +47,8 @@ function loadPrefs(): Prefs {
     const v2 = localStorage.getItem(PREF_KEY);
     const stored = JSON.parse(v2 ?? localStorage.getItem(PREF_KEY_V1) ?? '{}');
     if (!v2) delete stored.hear;
-    return { layout: 'single', ga: true, hear: true, vector: false, vectorAlpha: 0.5, selected: null, ...stored };
-  } catch { return { layout: 'single', ga: true, hear: true, vector: false, vectorAlpha: 0.5, selected: null }; }
+    return { layout: 'single', ga: true, hear: true, vector: false, vectorAlpha: 0.5, trail: true, trailAlpha: 0.5, selected: null, ...stored };
+  } catch { return { layout: 'single', ga: true, hear: true, vector: false, vectorAlpha: 0.5, trail: true, trailAlpha: 0.5, selected: null }; }
 }
 function save(key: string, v: unknown) { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* privates Fenster */ } }
 
@@ -100,8 +100,8 @@ function ringStep(r: number): number {
 }
 
 // ── Ein rundes Radarbild ─────────────────────────────────────────────────────
-function Scope({ fav, ga, hear, vector, vectorAlpha, pollMs, compact, onSelectFav }: {
-  fav: Favorite; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; pollMs: number; compact: boolean; onSelectFav?: () => void;
+function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, compact, onSelectFav }: {
+  fav: Favorite; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; trail: boolean; trailAlpha: number; pollMs: number; compact: boolean; onSelectFav?: () => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -110,6 +110,17 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, pollMs, compact, onSelectFa
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [error, setError] = useState(false);
   const [selHex, setSelHex] = useState<string | null>(null);
+  // Flugbahn des gewählten Flugs seit dem Start (adsb.lol-Trace), alle 30 s erneuert
+  const [trace, setTrace] = useState<TracePoint[]>([]);
+  useEffect(() => {
+    setTrace([]);
+    if (!trail || !selHex) return;
+    let alive = true;
+    const load = () => fetchTrace(selHex).then((t) => { if (alive) setTrace(t); }).catch(() => {});
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [trail, selHex]);
   const [, tick] = useState(0);
   const [fields, setFields] = useState<AreaAirport[]>([]);
   useEffect(() => {
@@ -260,6 +271,24 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, pollMs, compact, onSelectFa
       }
     }
     ctx.restore();
+
+    // Flugbahn des gewählten Flugs (geschätzte Abschnitte gestrichelt), bis zur aktuellen Position
+    const selNow = visible.find((v) => v.a.hex === selHex);
+    if (trail && trace.length > 1) {
+      ctx.save();
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+      ctx.strokeStyle = C.sel; ctx.lineWidth = 1.5; ctx.globalAlpha = trailAlpha; ctx.lineJoin = 'round';
+      for (let i = 1; i < trace.length; i++) {
+        const a = toXY(trace[i - 1].lat, trace[i - 1].lng), b = toXY(trace[i].lat, trace[i].lng);
+        ctx.setLineDash(trace[i].est ? [4, 4] : []);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      if (selNow) {
+        const a = toXY(trace[trace.length - 1].lat, trace[trace.length - 1].lng), b = toXY(selNow.p.lat, selNow.p.lng);
+        ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     // Nordpfeil oben links
     {
@@ -489,7 +518,7 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
   const [shared, setShared] = useState<Favorite | null>(sharedIn ?? null);
   const [gpsMsg, setGpsMsg] = useState<string | null>(null);
   const [edit, setEdit] = useState(false);
-  const [vecMenu, setVecMenu] = useState(false);
+  const [alphaMenu, setAlphaMenu] = useState<'vector' | 'trail' | null>(null);
   useEffect(() => save(FAV_KEY, favs), [favs]);
   useEffect(() => save(PREF_KEY, prefs), [prefs]);
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
@@ -549,20 +578,12 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
           <button key={l} onClick={() => setPref({ layout: l })} style={{ ...BTN, ...(prefs.layout === l ? ACTIVE : {}) }}>{l === 'single' ? 'EINZELN' : 'ALLE'}</button>
         ))}
         <button onClick={() => setPref({ ga: !prefs.ga })} style={{ ...BTN, ...(prefs.ga ? ACTIVE : {}) }} title="Kleinflieger, Hubschrauber, Segler zeigen">GA</button>
-        <span style={{ position: 'relative' }}>
-          <button onClick={() => setPref({ vector: !prefs.vector })}
-            onContextMenu={(e) => { e.preventDefault(); setPref({ vector: true }); setVecMenu((o) => !o); }}
-            style={{ ...BTN, ...(prefs.vector ? ACTIVE : {}) }} title="Geschwindigkeitsvektor: Strich bis zur Position in 1 Minute (Rechtsklick: Deckkraft)">VEKTOR</button>
-          {vecMenu && prefs.vector && (
-            <div onMouseLeave={() => setVecMenu(false)} style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 5, background: '#06140c', border: '1px solid #1a4428', padding: '6px 8px', fontSize: 11, color: C.text, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
-              DECKKRAFT
-              <input type="range" min={10} max={100} step={5} value={Math.round(prefs.vectorAlpha * 100)}
-                onChange={(e) => setPref({ vectorAlpha: Number(e.target.value) / 100 })} style={{ width: 110 }} />
-              <span style={{ width: 34, textAlign: 'right' }}>{Math.round(prefs.vectorAlpha * 100)} %</span>
-              <span onClick={() => setVecMenu(false)} style={{ cursor: 'pointer', color: '#4f8a60' }}>✕</span>
-            </div>
-          )}
-        </span>
+        <AlphaToggle label="VEKTOR" title="Geschwindigkeitsvektor: Strich bis zur Position in 1 Minute (Rechtsklick: Deckkraft)"
+          on={prefs.vector} alpha={prefs.vectorAlpha} open={alphaMenu === 'vector'} onOpen={(o) => setAlphaMenu(o ? 'vector' : null)}
+          onToggle={(on) => setPref({ vector: on })} onAlpha={(a) => setPref({ vectorAlpha: a })} />
+        <AlphaToggle label="BAHN" title="Flugbahn des gewählten Flugs seit dem Start (Rechtsklick: Deckkraft)"
+          on={prefs.trail} alpha={prefs.trailAlpha} open={alphaMenu === 'trail'} onOpen={(o) => setAlphaMenu(o ? 'trail' : null)}
+          onToggle={(on) => setPref({ trail: on })} onAlpha={(a) => setPref({ trailAlpha: a })} />
         <button onClick={() => setPref({ hear: !prefs.hear })} style={{ ...BTN, ...(prefs.hear ? { ...ACTIVE, color: C.hear, borderColor: '#aa8844' } : {}) }} title="Schätzen, welchen Flieger man am Favoriten gerade hört (Wind, Höhe, Tempo)">♪ HÖREN</button>
         {current && !grid && <button onClick={() => setEdit((e) => !e)} style={{ ...BTN, ...(edit ? ACTIVE : {}) }}>EINSTELLEN</button>}
         {current && !grid && <button onClick={() => void share(current)} style={BTN} title="Link zu diesem Radar teilen oder kopieren">TEILEN</button>}
@@ -592,10 +613,10 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
       {grid ? (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 260 : 340}px, 1fr))`, gap: 14 }}>
           {favs.map((f) => (
-            <Scope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
+            <Scope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} trail={prefs.trail} trailAlpha={prefs.trailAlpha} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
           ))}
         </div>
-      ) : current && <Scope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} pollMs={5000} compact={false} />}
+      ) : current && <Scope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} trail={prefs.trail} trailAlpha={prefs.trailAlpha} pollMs={5000} compact={false} />}
 
       <div style={{ fontSize: 10, color: '#3a6a4a', marginTop: 10 }}>
         Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe in 100 ft, Trend, Geschwindigkeit in 10 kt / Typ · VEKTOR = Strich bis zur Position in 1 min · Symbole in echter Größe und Triebwerkszahl ·
@@ -603,6 +624,29 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
         Daten: <a href="https://adsb.lol" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>adsb.lol</a> (ODbL)
       </div>
     </div>
+  );
+}
+
+/** Schalter mit Deckkraft-Regler per Rechtsklick (am Handy langes Drücken) */
+function AlphaToggle({ label, title, on, alpha, open, onOpen, onToggle, onAlpha }: {
+  label: string; title: string; on: boolean; alpha: number; open: boolean;
+  onOpen: (open: boolean) => void; onToggle: (on: boolean) => void; onAlpha: (a: number) => void;
+}) {
+  return (
+    <span style={{ position: 'relative' }}>
+      <button onClick={() => onToggle(!on)}
+        onContextMenu={(e) => { e.preventDefault(); onToggle(true); onOpen(!open); }}
+        style={{ ...BTN, ...(on ? ACTIVE : {}) }} title={title}>{label}</button>
+      {open && on && (
+        <div onMouseLeave={() => onOpen(false)} style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 5, background: '#06140c', border: '1px solid #1a4428', padding: '6px 8px', fontSize: 11, color: C.text, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+          DECKKRAFT
+          <input type="range" min={10} max={100} step={5} value={Math.round(alpha * 100)}
+            onChange={(e) => onAlpha(Number(e.target.value) / 100)} style={{ width: 110 }} />
+          <span style={{ width: 34, textAlign: 'right' }}>{Math.round(alpha * 100)} %</span>
+          <span onClick={() => onOpen(false)} style={{ cursor: 'pointer', color: '#4f8a60' }}>✕</span>
+        </div>
+      )}
+    </span>
   );
 }
 
