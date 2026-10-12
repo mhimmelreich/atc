@@ -16,7 +16,8 @@ import type { Town } from '@/services/TownService';
 import type { Landmark } from '@/services/LandmarkService';
 import type { Road } from '@/services/RoadService';
 import { pad3 } from './Speech';
-import { destinationPoint, distanceNM } from '@/utils/geo';
+import { distanceNM } from '@/utils/geo';
+import { LiveSmoother } from './LiveSmoother';
 import { SCORE_LANDING, SCORE_GOAROUND, SCORE_SEPARATION_VIOLATION, SCORE_COLLISION } from './constants';
 
 const RADIO_LOG_SIZE = 50;
@@ -25,7 +26,6 @@ const LIVE_TRAIL_MAX = 120;
 const WATCH_TRAIL_MAX = 180;
 // WATCH: für den STAR-Vergleich nur der Teil der Flugbahn in Platznähe
 const STAR_MATCH_NM = 120;
-const LIVE_EXTRAPOLATE_MAX_S = 30;
 // Landerichtung aus dem Wind: wie in echt bleibt die Vorzugsrichtung, bis der Rückenwind (mit Böen) mehr als 5 kt beträgt
 const TAILWIND_MAX_KT = 5;
 // Vorzugsrichtung ohne bessere Daten: West (Westwetterlage; z. B. Frankfurt Betriebsrichtung 25)
@@ -156,6 +156,7 @@ export class GameEngine {
   private lastTs: number | null = null;
   private conflictCooldowns = new Set<string>();
   private liveTraffic: LiveAircraft[] = [];
+  private liveSmoother = new LiveSmoother();
   private liveTrails = new Map<string, TrailPoint[]>();
   private liveInbound = new Map<string, Inbound>(); // hex → Anflug zum gewählten Platz
   private takenOver = new Set<string>();             // hex der übernommenen echten Flieger
@@ -398,12 +399,11 @@ export class GameEngine {
     for (const ac of this.liveTraffic) {
       // Übernommene Flieger lotst der Spieler, ihr echtes Gegenstück wird nicht gezeigt
       if (ac.ground || this.takenOver.has(ac.hex)) continue;
-      const dt = Math.min(LIVE_EXTRAPOLATE_MAX_S, Math.max(0, (now - ac.ts) / 1000));
-      if (ac.gs === null || ac.track === null || dt === 0) { out.push(ac); continue; }
-      const p = destinationPoint(ac.lat, ac.lng, ac.track, (ac.gs * dt) / 3600);
-      const altFt = ac.altFt !== null && ac.vs !== null ? ac.altFt + (ac.vs * dt) / 60 : ac.altFt;
-      out.push({ ...ac, lat: p.lat, lng: p.lng, altFt });
+      // Weitergerechnet und bei neuen Meldungen weich nachgeführt statt springend
+      const p = this.liveSmoother.at(ac, now);
+      out.push({ ...ac, lat: p.lat, lng: p.lng, altFt: p.alt });
     }
+    this.liveSmoother.keep(this.liveTraffic.map((ac) => ac.hex));
     return out;
   }
 

@@ -10,6 +10,7 @@ import type { Weather } from '@/types/weather';
 import { airlineName } from '@/game/Airlines';
 import { drawPlanform, planform } from '@/game/aircraftPlanform';
 import { regCountry, typeName, typeSeats } from '@/game/aircraftInfo';
+import { LiveSmoother } from '@/game/LiveSmoother';
 import type { LiveAircraft } from '@/types/live';
 import { bearingBetween, destinationPoint, distanceNM } from '@/utils/geo';
 
@@ -84,20 +85,6 @@ const CATEGORY: Record<string, string> = {
   B1: 'Segelflugzeug', B4: 'Ultraleicht', B6: 'Drohne', B3: 'Fallschirm',
 };
 
-/** Position jetzt, aus der letzten Meldung mit Kurs und Geschwindigkeit weitergerechnet (höchstens 30 s) */
-function posNow(a: LiveAircraft, now: number): { lat: number; lng: number } {
-  if (a.ground || a.gs === null || a.track === null) return a;
-  const dt = Math.min(30, Math.max(0, (now - a.ts) / 1000));
-  return destinationPoint(a.lat, a.lng, a.track, (a.gs * dt) / 3600);
-}
-
-/** Höhe jetzt: gemeldete Höhe mit Steig-/Sinkrate weitergerechnet (höchstens 30 s) */
-function altNow(a: LiveAircraft, now: number): number | null {
-  if (a.ground || a.altFt === null) return a.altFt;
-  const dt = Math.min(30, Math.max(0, (now - a.ts) / 1000));
-  return Math.round(a.altFt + ((a.vs ?? 0) * dt) / 60);
-}
-
 function inBand(a: LiveAircraft, f: Favorite): boolean {
   const alt = a.ground || a.altFt === null ? 0 : a.altFt;
   return alt >= Math.min(f.altMin, f.altMax) && alt <= Math.max(f.altMin, f.altMax);
@@ -155,6 +142,7 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
     return () => { alive = false; };
   }, [fav.lat, fav.lng, fav.radiusNm]);
   const history = useRef(new Map<string, Array<{ lat: number; lng: number }>>());
+  const smoother = useRef(new LiveSmoother());
   const hits = useRef<Array<{ hex: string; x: number; y: number }>>([]);
 
   // Größe: quadratisch, so breit wie Platz ist
@@ -193,9 +181,9 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
     return () => { alive = false; clearInterval(id); };
   }, [fav.lat, fav.lng, fav.radiusNm, pollMs]);
 
-  // Ziele jede Sekunde weiterrechnen
+  // Ziele laufend weiterrechnen (geglättet, siehe LiveSmoother)
   // HÖREN: das wahrscheinlich hörbare Ziel pulsiert, dafür flüssiger zeichnen
-  useEffect(() => { const id = setInterval(() => tick((n) => n + 1), hear ? 66 : 1000); return () => clearInterval(id); }, [hear]);
+  useEffect(() => { const id = setInterval(() => tick((n) => n + 1), hear ? 66 : 100); return () => clearInterval(id); }, [hear]);
 
   // Wind und QNH vom nächsten großen oder mittleren Platz (METAR), Bodenhöhe vom nächsten Platz
   const near = (kinds: string) => fields.filter((f) => kinds.includes(f.kind))
@@ -213,10 +201,13 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
   }, [hear, metarField?.ident]);
 
   const now = Date.now();
+  const smooth = smoother.current;
+  const shown = new Map(traffic.map((a) => [a.hex, smooth.at(a, now)]));
+  smooth.keep(shown.keys());
   const visible = traffic
-    .map((a) => ({ ...a, altFt: altNow(a, now) }))
+    .map((a) => ({ ...a, altFt: shown.get(a.hex)!.alt }))
     .filter((a) => (ga || !isGa(a)) && inBand(a, fav))
-    .map((a) => { const p = posNow(a, now); return { a, p, dist: distanceNM(fav.lat, fav.lng, p.lat, p.lng) }; })
+    .map((a) => { const p = shown.get(a.hex)!; return { a, p: { lat: p.lat, lng: p.lng }, dist: distanceNM(fav.lat, fav.lng, p.lat, p.lng) }; })
     .filter((v) => v.dist <= fav.radiusNm)
     .sort((x, y) => x.dist - y.dist);
   const selected = visible.find((v) => v.a.hex === selHex) ?? null;
@@ -394,13 +385,13 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
     ctx.restore();
     // HÖREN: hörbare Flieger, die nicht im Bild sind (außerhalb von Radius oder Höhenband), als Marke am Rand
     if (hear) {
-      const shown = new Set(visible.map((v) => v.a.hex));
+      const onScope = new Set(visible.map((v) => v.a.hex));
       const byHex = new Map(traffic.map((a) => [a.hex, a]));
       ctx.font = `${compact ? 9 : 10}px "Courier New", monospace`;
-      for (const h of heard.filter((x) => x.dba >= AUDIBLE_DBA && !shown.has(x.hex)).slice(0, 4)) {
+      for (const h of heard.filter((x) => x.dba >= AUDIBLE_DBA && !onScope.has(x.hex)).slice(0, 4)) {
         const a = byHex.get(h.hex);
         if (!a) continue;
-        const q = posNow(a, now);
+        const q = shown.get(a.hex) ?? a;
         const brg = (bearingBetween(fav.lat, fav.lng, q.lat, q.lng) * Math.PI) / 180;
         const inside = distanceNM(fav.lat, fav.lng, q.lat, q.lng) <= fav.radiusNm;
         const r = inside ? Math.min(R - 10, distanceNM(fav.lat, fav.lng, q.lat, q.lng) * scale) : R - 10;
