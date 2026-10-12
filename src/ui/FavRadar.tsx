@@ -185,20 +185,27 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
   // HÖREN: das wahrscheinlich hörbare Ziel pulsiert, dafür flüssiger zeichnen
   useEffect(() => { const id = setInterval(() => tick((n) => n + 1), hear ? 66 : 100); return () => clearInterval(id); }, [hear]);
 
-  // Wind und QNH vom nächsten großen oder mittleren Platz (METAR), Bodenhöhe vom nächsten Platz
-  const near = (kinds: string) => fields.filter((f) => kinds.includes(f.kind))
-    .map((f) => ({ f, d: distanceNM(fav.lat, fav.lng, f.lat, f.lng) })).sort((x, y) => x.d - y.d)[0]?.f;
-  const metarField = near('LM');
-  const groundField = near('LMS');
+  // Wind und QNH vom nächstgelegenen Flughafen, der ein METAR meldet (bei GPS LIVE mit dem Standort neu gesucht),
+  // Bodenhöhe vom nächsten Platz
+  const byDist = fields.map((f) => ({ f, d: distanceNM(fav.lat, fav.lng, f.lat, f.lng) })).sort((x, y) => x.d - y.d);
+  const groundField = byDist[0]?.f;
+  const metarKey = byDist.filter(({ f }) => /^[A-Z]{4}$/.test(f.ident)).slice(0, 8).map(({ f }) => f.ident).join(',');
   const [wx, setWx] = useState<Weather | null>(null);
   useEffect(() => {
-    if (!hear || !metarField) { setWx(null); return; }
+    if (!metarKey) { setWx(null); return; }
     let alive = true;
-    const load = () => fetchWeather(metarField.ident).then((w) => { if (alive) setWx(w); });
+    const load = async () => {
+      for (const icao of metarKey.split(',')) {
+        const w = await fetchWeather(icao);
+        if (!alive) return;
+        if (w) { setWx(w); return; }
+      }
+      setWx(null);
+    };
     load();
     const id = setInterval(load, WEATHER_POLL_MS);
     return () => { alive = false; clearInterval(id); };
-  }, [hear, metarField?.ident]);
+  }, [metarKey]);
 
   const now = Date.now();
   const smooth = smoother.current;
@@ -483,9 +490,9 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
           <div style={{ color: error ? '#ffaa00' : C.text }}>{error ? 'keine Daten' : age === null ? 'lädt…' : `vor ${age} s`}</div>
         </div>
         {/* unten links: Hören */}
-        {hear && (
+        {(
           <div style={corner({ left: 0, bottom: 0 })}>
-            <HearPanel heard={heard} traffic={traffic} visible={new Set(visible.map((v) => v.a.hex))} wx={wx} field={metarField?.ident} compact={compact} onSelect={setSelHex} />
+            <HearPanel hear={hear} heard={heard} traffic={traffic} visible={new Set(visible.map((v) => v.a.hex))} wx={wx} field={wx?.icao} compact={compact} onSelect={setSelHex} />
           </div>
         )}
         {/* unten rechts: gewählter Flieger, sonst die nächsten */}
@@ -501,8 +508,8 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
   );
 }
 
-function HearPanel({ heard, traffic, visible, wx, field, compact, onSelect }: {
-  heard: HearResult[]; traffic: LiveAircraft[]; visible: Set<string>; wx: Weather | null; field?: string; compact: boolean; onSelect: (hex: string) => void;
+function HearPanel({ hear, heard, traffic, visible, wx, field, compact, onSelect }: {
+  hear: boolean; heard: HearResult[]; traffic: LiveAircraft[]; visible: Set<string>; wx: Weather | null; field?: string; compact: boolean; onSelect: (hex: string) => void;
 }) {
   const byHex = new Map(traffic.map((a) => [a.hex, a]));
   const top = heard.filter((h) => h.dba >= AUDIBLE_DBA).slice(0, compact ? 1 : 3);
@@ -511,7 +518,7 @@ function HearPanel({ heard, traffic, visible, wx, field, compact, onSelect }: {
   const qnh = wx?.qnh ? `QNH ${Math.round(wx.qnh)} hPa${wx.altimeterInHg ? ` (${wx.altimeterInHg.toFixed(2)} inHg)` : ''}` : 'QNH ?';
   return (
     <>
-      <div style={{ color: C.hear }}>♪ HÖREN</div>
+      {hear && <div style={{ color: C.hear }}>♪ HÖREN</div>}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '2px 0' }}>
         <WindRose wx={wx} size={compact ? 30 : 40} />
         <div>
@@ -519,7 +526,7 @@ function HearPanel({ heard, traffic, visible, wx, field, compact, onSelect }: {
           <div>{qnh}</div>
         </div>
       </div>
-      {top.length === 0 && <div>kein Flieger hörbar (&lt;{AUDIBLE_DBA} dB(A))</div>}
+      {hear && top.length === 0 && <div>kein Flieger hörbar (&lt;{AUDIBLE_DBA} dB(A))</div>}
       {top.map((h, i) => {
         const a = byHex.get(h.hex);
         return (
