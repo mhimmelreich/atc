@@ -88,6 +88,13 @@ function posNow(a: LiveAircraft, now: number): { lat: number; lng: number } {
   return destinationPoint(a.lat, a.lng, a.track, (a.gs * dt) / 3600);
 }
 
+/** Höhe jetzt: gemeldete Höhe mit Steig-/Sinkrate weitergerechnet (höchstens 30 s) */
+function altNow(a: LiveAircraft, now: number): number | null {
+  if (a.ground || a.altFt === null) return a.altFt;
+  const dt = Math.min(30, Math.max(0, (now - a.ts) / 1000));
+  return Math.round(a.altFt + ((a.vs ?? 0) * dt) / 60);
+}
+
 function inBand(a: LiveAircraft, f: Favorite): boolean {
   const alt = a.ground || a.altFt === null ? 0 : a.altFt;
   return alt >= Math.min(f.altMin, f.altMax) && alt <= Math.max(f.altMin, f.altMax);
@@ -189,6 +196,7 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
 
   const now = Date.now();
   const visible = traffic
+    .map((a) => ({ ...a, altFt: altNow(a, now) }))
     .filter((a) => (ga || !isGa(a)) && inBand(a, fav))
     .map((a) => { const p = posNow(a, now); return { a, p, dist: distanceNM(fav.lat, fav.lng, p.lat, p.lng) }; })
     .filter((v) => v.dist <= fav.radiusNm)

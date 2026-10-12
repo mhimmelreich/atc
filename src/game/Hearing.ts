@@ -10,9 +10,10 @@ import { bearingBetween, destinationPoint, distanceNM } from '@/utils/geo';
 const C_MS = 340;            // Schallgeschwindigkeit
 const FT = 0.3048;
 const NM = 1852;
-const AIR_DB_PER_M = 0.0025; // Luftdämpfung A-bewertet über größere Strecken (tiefe Frequenzen tragen weit), ~15 °C, 70 % Feuchte
+// Luftdämpfung: auf Entfernung dominiert tieffrequenter Strahl- und Fanlärm (250–500 Hz, ~1,5 dB/km bei 15 °C, 70 % Feuchte)
+const AIR_DB_PER_M = 0.0015;
 /** Unter etwa diesem Pegel geht ein Flieger im Alltagslärm unter */
-export const AUDIBLE_DBA = 40;
+export const AUDIBLE_DBA = 35;
 
 export interface HearInput {
   lat: number;
@@ -36,19 +37,23 @@ export interface HearResult {
   delayS: number;
 }
 
-/** Schallleistungspegel (dB(A)) nach ADS-B-Kategorie bzw. Rufzeichen, grob nach Lärmzertifikaten */
+/**
+ * Schallleistungspegel (dB(A)) nach ADS-B-Kategorie bzw. Rufzeichen im Anflug/Reiseflug.
+ * Geeicht an Lmax unter dem Flugweg: A320 im Anflug in 1000 ft ≈ 87 dB(A), in 8000 ft ≈ 60–65 dB(A)
+ * (Messstellen um Frankfurt), Heavy etwa 5 dB lauter.
+ */
 function sourceLevel(a: LiveAircraft): number {
   switch (a.category) {
-    case 'A5': return 152; // Heavy (B777, A350, B747)
-    case 'A4': return 149; // B757
-    case 'A3': return 146; // A320, B737
-    case 'A2': return 141; // Regionaljets, Turboprops
-    case 'A1': return 130; // Kleinflugzeug
-    case 'A7': return 138; // Hubschrauber: laut, Rotorknall
+    case 'A5': return 153; // Heavy (B777, A350, B747)
+    case 'A4': return 150; // B757
+    case 'A3': return 148; // A320, B737
+    case 'A2': return 144; // Regionaljets, Turboprops
+    case 'A1': return 132; // Kleinflugzeug
+    case 'A7': return 140; // Hubschrauber: laut, Rotorknall
     case 'B1': return 95;  // Segelflugzeug
-    case 'B4': return 120; // Ultraleicht
-    case 'A6': return 155; // Hochleistung (Militär)
-    default: return /^[A-Z]{3}\d/.test(a.callsign) ? 146 : 132;
+    case 'B4': return 122; // Ultraleicht
+    case 'A6': return 158; // Hochleistung (Militär)
+    default: return /^[A-Z]{3}\d/.test(a.callsign) ? 148 : 134;
   }
 }
 
@@ -63,12 +68,14 @@ export function estimateHearing(list: LiveAircraft[], at: HearInput, now: number
     if (a.ground || a.altFt === null) {
       if (gs < 40) continue;
       lw += 3;
-    } else if (vs > 800) lw += 5;
-    else if (vs < -500) lw -= 3;
+    } else if (vs > 800) lw += 6; // Startschub
+    else if (vs < -500) lw -= 1; // Leerlauf, aber Klappen und Fahrwerk
     // Umströmungsgeräusch (Klappen, Fahrwerk) wächst mit der Geschwindigkeit; tief und schnell = laut
     if (gs > 0) lw += Math.max(-4, Math.min(3, 10 * Math.log10(Math.max(gs, 60) / 250)));
 
-    const hAglFt = a.ground || a.altFt === null ? 0 : Math.max(0, a.altFt + qnhFt - at.elevFt);
+    // Höhe zum Zeitpunkt der Meldung, mit der Sinkrate auf jetzt weitergerechnet (höchstens 30 s)
+    const ageS = Math.min(30, Math.max(0, (now - a.ts) / 1000));
+    const hAglFt = a.ground || a.altFt === null ? 0 : Math.max(0, a.altFt + (vs * ageS) / 60 + qnhFt - at.elevFt);
     // Erst ungefähr, dann an der Position, von der der Schall jetzt ankommt
     let lat = a.lat, lng = a.lng, delay = 0;
     for (let i = 0; i < 2; i++) {
