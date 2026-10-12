@@ -9,7 +9,7 @@ import { estimateHearing, AUDIBLE_DBA, type HearResult } from '@/game/Hearing';
 import type { Weather } from '@/types/weather';
 import { airlineName } from '@/game/Airlines';
 import { drawPlanform, planform } from '@/game/aircraftPlanform';
-import { regCountry, typeName } from '@/game/aircraftInfo';
+import { regCountry, typeName, typeSeats } from '@/game/aircraftInfo';
 import type { LiveAircraft } from '@/types/live';
 import { bearingBetween, destinationPoint, distanceNM } from '@/utils/geo';
 
@@ -631,6 +631,8 @@ function InfoModal({ info, fav, onClose }: { info: InfoRef; fav: Favorite; onClo
     rows.push([pf.kind === 'heli' ? 'ROTOR' : 'SPANNWEITE', `${pf.span.toFixed(1)} m`]);
     const eng = { jet: 'Strahltriebwerke', turboprop: 'Turboprop', piston1: 'Kolbenmotor', piston2: 'Kolbenmotoren', heli: 'Turbine/Kolben', glider: 'ohne Motor' }[pf.kind];
     rows.push(['ANTRIEB', pf.engines > 0 ? `${pf.engines} × ${eng}${pf.rearEngines ? ' (hinten)' : ''}` : eng]);
+    const seats = typeSeats(info.value);
+    if (seats) rows.push(['PASSAGIERE', seats]);
     if (info.a.category) rows.push(['ADS-B', `${info.a.category} · ${CATEGORY[info.a.category] ?? ''}`]);
     rows.push(['MEHR', ext(`https://de.wikipedia.org/w/index.php?search=${encodeURIComponent(typeName(info.value) ?? info.value)}`, 'Wikipedia')]);
   } else if (info.kind === 'reg') {
