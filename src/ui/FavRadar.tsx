@@ -23,6 +23,8 @@ export interface Favorite {
   /** Höhenband in ft (barometrisch, wie gesendet) */
   altMin: number;
   altMax: number;
+  /** Mitte folgt der aktuellen GPS-Position des Geräts */
+  gps?: boolean;
 }
 
 interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; trail: boolean; trailAlpha: number; selected: string | null }
@@ -108,7 +110,9 @@ function ringStep(r: number): number {
 }
 
 // ── Ein rundes Radarbild ─────────────────────────────────────────────────────
-function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, compact, onSelectFav }: {
+function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, compact, onSelectFav, gpsAcc }: {
+  /** GPS LIVE: Genauigkeit in m, null = noch keine Position; undefined = fester Ort */
+  gpsAcc?: number | null;
   fav: Favorite; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; trail: boolean; trailAlpha: number; pollMs: number; compact: boolean; onSelectFav?: () => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -123,13 +127,26 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
   const [trace, setTrace] = useState<TracePoint[]>([]);
   useEffect(() => {
     setTrace([]);
-    if (!trail || !selHex) return;
+    if (!selHex) return; // auch ohne BAHN: der Anfang der Flugbahn verrät den Startplatz
     let alive = true;
     const load = () => fetchTrace(selHex).then((t) => { if (alive) setTrace(t); }).catch(() => {});
     load();
     const id = setInterval(load, 30_000);
     return () => { alive = false; clearInterval(id); };
-  }, [trail, selHex]);
+  }, [selHex]);
+  // Startplatz aus dem Anfang der Flugbahn (am Boden oder tief), falls die Route unbekannt ist
+  const [originGuess, setOriginGuess] = useState<string | null>(null);
+  const t0 = trace[0];
+  useEffect(() => {
+    setOriginGuess(null);
+    if (!t0 || (t0.altFt !== null && t0.altFt > 3000)) return;
+    let alive = true;
+    fetch(`${import.meta.env.BASE_URL}api/opendata/nearest?lat=${t0.lat}&lon=${t0.lng}&any=1`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { icao: string; distNM: number } | null) => { if (alive && d && d.distNM <= 5) setOriginGuess(d.icao); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [t0?.lat, t0?.lng, t0?.altFt]);
   const [, tick] = useState(0);
   const [fields, setFields] = useState<AreaAirport[]>([]);
   useEffect(() => {
@@ -156,7 +173,6 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
   // Abfrage
   useEffect(() => {
     let alive = true;
-    history.current.clear();
     const load = () => document.hidden ? undefined : fetchLiveTraffic(fav.lat, fav.lng, { nm: fav.radiusNm + 1, all: true })
       .then((list) => {
         if (!alive) return;
@@ -302,7 +318,7 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
 
     // Nordpfeil oben links
     {
-      const nx = 14, ny = compact ? 34 : 38;
+      const nx = 14, ny = compact ? 50 : 56;
       ctx.fillStyle = '#9fd8b0'; ctx.strokeStyle = '#9fd8b0'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(nx, ny - 14); ctx.lineTo(nx + 6, ny + 4); ctx.lineTo(nx, ny); ctx.closePath(); ctx.fill();
       ctx.beginPath(); ctx.moveTo(nx, ny - 14); ctx.lineTo(nx - 6, ny + 4); ctx.lineTo(nx, ny); ctx.closePath(); ctx.stroke();
@@ -376,6 +392,32 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
       hits.current.push({ hex: a.hex, x, y });
     }
     ctx.restore();
+    // HÖREN: hörbare Flieger, die nicht im Bild sind (außerhalb von Radius oder Höhenband), als Marke am Rand
+    if (hear) {
+      const shown = new Set(visible.map((v) => v.a.hex));
+      const byHex = new Map(traffic.map((a) => [a.hex, a]));
+      ctx.font = `${compact ? 9 : 10}px "Courier New", monospace`;
+      for (const h of heard.filter((x) => x.dba >= AUDIBLE_DBA && !shown.has(x.hex)).slice(0, 4)) {
+        const a = byHex.get(h.hex);
+        if (!a) continue;
+        const q = posNow(a, now);
+        const brg = (bearingBetween(fav.lat, fav.lng, q.lat, q.lng) * Math.PI) / 180;
+        const inside = distanceNM(fav.lat, fav.lng, q.lat, q.lng) <= fav.radiusNm;
+        const r = inside ? Math.min(R - 10, distanceNM(fav.lat, fav.lng, q.lat, q.lng) * scale) : R - 10;
+        const x = cx + r * Math.sin(brg), y = cy - r * Math.cos(brg);
+        const pulse = loudest?.hex === a.hex ? (1 + Math.sin(now / 250)) / 2 : 0.5;
+        ctx.save();
+        ctx.translate(x, y); ctx.rotate(brg);
+        ctx.fillStyle = C.hear; ctx.globalAlpha = 0.5 + 0.5 * pulse;
+        ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(5, 3); ctx.lineTo(-5, 3); ctx.closePath(); ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = C.hear;
+        const lx = x - Math.sin(brg) * 14, ly = y + Math.cos(brg) * 14;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(`♪ ${a.callsign} ${Math.round(distanceNM(fav.lat, fav.lng, q.lat, q.lng))} NM`, lx, ly);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+      }
+    }
     ctx.strokeStyle = '#1a5a30'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
   });
@@ -390,6 +432,27 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
   };
 
   const age = updatedAt === null ? null : Math.round((now - updatedAt) / 1000);
+  // VON / NACH: Route aus der Routendatenbank, sonst geschätzt (Startplatz aus der Flugbahn, Ziel aus Sinkflug und Kurs)
+  let legs: Legs = {};
+  if (selected) {
+    const a = selected.a;
+    if (a.route) {
+      const codes = a.route.split('-');
+      legs = { from: { code: codes[0], guess: false }, to: { code: codes[codes.length - 1], guess: false }, via: codes.slice(1, -1) };
+    } else {
+      if (originGuess) legs.from = { code: originGuess, guess: true };
+      if (!a.ground && a.altFt !== null && a.altFt < 12000 && (a.vs ?? 0) < -300 && a.track !== null) {
+        const kinds = isGa(a) ? 'LMS' : 'LM';
+        const dest = fields
+          .filter((f) => kinds.includes(f.kind) && f.ident !== originGuess)
+          .map((f) => ({ f, d: distanceNM(selected.p.lat, selected.p.lng, f.lat, f.lng), b: bearingBetween(selected.p.lat, selected.p.lng, f.lat, f.lng) }))
+          .filter((x) => x.d < 60 && (x.d < 6 || Math.abs(((x.b - a.track! + 540) % 360) - 180) < 40))
+          .sort((x, y) => x.d - y.d)[0];
+        if (dest) legs.to = { code: dest.f.ident, guess: true };
+      }
+    }
+  }
+  const names = useAirportNames([legs.from?.code, legs.to?.code, ...(legs.via ?? [])]);
   // Zusatzinfos in die vier Ecken des Quadrats, die der Kreis frei lässt
   const fs = compact ? 10 : 11;
   const cornerW = Math.round(size * 0.34);
@@ -404,6 +467,7 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
         {/* oben links: Name (Nordpfeil darunter im Bild) */}
         <div style={corner({ left: 0, top: 0 })}>
           <span style={{ color: '#ff9ed8', fontWeight: 'bold', cursor: onSelectFav ? 'pointer' : undefined }} onClick={onSelectFav}>★ {fav.name}</span>
+          {gpsAcc !== undefined && <div style={{ color: gpsAcc === null ? '#ffaa00' : '#7fa88c' }}>{gpsAcc === null ? 'GPS sucht…' : `GPS LIVE ±${Math.round(gpsAcc)} m`}</div>}
         </div>
         {/* oben rechts: Stand */}
         <div style={corner({ right: 0, top: 0, textAlign: 'right' })}>
@@ -419,7 +483,7 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
         )}
         {/* unten rechts: gewählter Flieger, sonst die nächsten */}
         <div style={corner({ right: 0, bottom: 0, textAlign: 'right' })}>
-          {selected ? <Details v={selected} fav={fav} onClose={() => setSelHex(null)} onInfo={setInfo} /> : !compact && visible.slice(0, 6).map(({ a, dist }) => (
+          {selected ? <Details v={selected} fav={fav} legs={legs} names={names} onClose={() => setSelHex(null)} onInfo={setInfo} /> : !compact && visible.slice(0, 6).map(({ a, dist }) => (
             <div key={a.hex} onClick={() => setSelHex(a.hex)} style={{ cursor: 'pointer', color: isGa(a) ? C.ga : C.airline, whiteSpace: 'nowrap' }}>
               {a.callsign} {altText(a)} {dist.toFixed(1)} NM {String(Math.round(bearingBetween(fav.lat, fav.lng, a.lat, a.lng))).padStart(3, '0')}°
             </div>
@@ -456,17 +520,40 @@ function HearPanel({ heard, traffic, visible, wx, field, compact, onSelect }: {
 
 type InfoRef = { kind: 'type' | 'reg' | 'airport'; value: string; a: LiveAircraft };
 
-function Details({ v, fav, onClose, onInfo }: { v: { a: LiveAircraft; p: { lat: number; lng: number }; dist: number }; fav: Favorite; onClose: () => void; onInfo: (i: InfoRef) => void }) {
+interface Legs { from?: { code: string; guess: boolean }; to?: { code: string; guess: boolean }; via?: string[] }
+
+// Flughafennamen (OurAirports) für VON / NACH, im Modul zwischengespeichert
+const apNames = new Map<string, string | null>();
+function useAirportNames(codes: Array<string | undefined>): Record<string, string> {
+  const [, bump] = useState(0);
+  const key = codes.filter(Boolean).join(',');
+  useEffect(() => {
+    const missing = key.split(',').filter((c) => c && !apNames.has(c));
+    if (missing.length === 0) return;
+    for (const c of missing) apNames.set(c, null);
+    fetch(`${import.meta.env.BASE_URL}api/opendata/names?icao=${missing.join(',')}`)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((d: Record<string, { name: string }>) => { for (const [c, v] of Object.entries(d)) apNames.set(c, v.name); bump((n) => n + 1); })
+      .catch(() => {});
+  }, [key]);
+  const out: Record<string, string> = {};
+  for (const c of key.split(',')) { const n = apNames.get(c); if (n) out[c] = n; }
+  return out;
+}
+
+function Details({ v, fav, legs, names, onClose, onInfo }: { v: { a: LiveAircraft; p: { lat: number; lng: number }; dist: number }; fav: Favorite; legs: Legs; names: Record<string, string>; onClose: () => void; onInfo: (i: InfoRef) => void }) {
   const { a, p, dist } = v;
   const airline = airlineName(a.callsign);
   const link = (kind: InfoRef['kind'], value: string) => (
     <span onClick={() => onInfo({ kind, value, a })} style={{ cursor: 'pointer', textDecoration: 'underline dotted', textUnderlineOffset: 2 }} title="Info">{value}</span>
   );
   const rows: Array<[string, React.ReactNode]> = [];
-  if (a.route) {
-    const codes = a.route.split('-');
-    rows.push(['ROUTE', <>{codes.map((c, i) => <span key={i}>{i > 0 && ' → '}{link('airport', c)}</span>)}</>]);
-  }
+  const leg = (l?: { code: string; guess: boolean }) => l
+    ? <span title={l.guess ? 'geschätzt (Route unbekannt)' : undefined}>{l.guess && '≈ '}{link('airport', l.code)}{names[l.code] && <span style={{ color: '#9fc8e0' }}> {shortName(names[l.code])}</span>}</span>
+    : <span style={{ color: '#4f8a60' }}>unbekannt</span>;
+  rows.push(['VON', leg(legs.from)]);
+  if (legs.via?.length) rows.push(['ÜBER', <>{legs.via.map((c, i) => <span key={c}>{i > 0 && ', '}{link('airport', c)}</span>)}</>]);
+  rows.push(['NACH', leg(legs.to)]);
   if (a.type) rows.push(['TYP', link('type', a.type)]);
   if (a.category) rows.push(['KLASSE', CATEGORY[a.category] ?? a.category]);
   if (a.reg) rows.push(['KENNZ.', link('reg', a.reg)]);
@@ -501,6 +588,8 @@ interface AirportInfo {
   runways: Array<{ name: string; lengthM: number | null; widthM: number | null; surface: string | null; lighted: boolean }>;
   freqs: Array<{ type: string; name: string; mhz: number }>;
 }
+/** "Frankfurt am Main Airport" → "Frankfurt am Main" (Platz in der Ecke ist knapp) */
+const shortName = (n: string) => n.replace(/\s+(International\s+)?(Airport|Airfield|Flughafen|Aeropuerto|Aéroport|Aeroporto)\b.*$/i, '').slice(0, 22);
 const AP_TYPE: Record<string, string> = { large_airport: 'Großflughafen', medium_airport: 'Regionalflughafen', small_airport: 'Flugplatz', heliport: 'Hubschrauberlandeplatz', seaplane_base: 'Wasserflugplatz' };
 
 /** Info in der Bildschirmmitte: Flugzeugtyp, Kennzeichen oder Flughafen */
@@ -596,9 +685,34 @@ function Editor({ fav, onChange, onDelete }: { fav: Favorite; onChange: (f: Favo
       <input type="range" min={2} max={MAX_RADIUS} value={fav.radiusNm} onChange={(e) => num('radiusNm', e.target.value, 2, MAX_RADIUS)} style={{ width: 90 }} />
       <label>HÖHE <input type="number" min={0} max={60000} step={500} value={fav.altMin} onChange={(e) => num('altMin', e.target.value, 0, 60000)} style={{ ...INPUT, width: 64 }} />
         {' – '}<input type="number" min={0} max={60000} step={500} value={fav.altMax} onChange={(e) => num('altMax', e.target.value, 0, 60000)} style={{ ...INPUT, width: 64 }} /> ft</label>
+      <label title="Mitte folgt immer der aktuellen GPS-Position dieses Geräts"><input type="checkbox" checked={!!fav.gps} onChange={(e) => onChange({ ...fav, gps: e.target.checked })} /> GPS LIVE</label>
       <button onClick={onDelete} style={{ ...BTN, color: '#ff8866', borderColor: '#553322' }}>LÖSCHEN</button>
     </div>
   );
+}
+
+// ── GPS LIVE: Favorit folgt der Position des Geräts ──────────────────────────
+const GPS_MIN_MOVE_NM = 0.03; // ~50 m: kleinere Sprünge (GPS-Rauschen) ignorieren
+function useLivePosition(on: boolean): { lat: number; lng: number; acc: number } | null {
+  const [pos, setPos] = useState<{ lat: number; lng: number; acc: number } | null>(null);
+  useEffect(() => {
+    if (!on || !navigator.geolocation) { setPos(null); return; }
+    const id = navigator.geolocation.watchPosition(
+      (p) => setPos((old) => (old && distanceNM(old.lat, old.lng, p.coords.latitude, p.coords.longitude) < GPS_MIN_MOVE_NM
+        ? old : { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy })),
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 10_000 },
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, [on]);
+  return pos;
+}
+
+/** Scope mit GPS LIVE: Mitte = aktuelle Position (bis sie da ist: gespeicherte) */
+function LiveScope(props: Parameters<typeof Scope>[0]) {
+  const pos = useLivePosition(!!props.fav.gps);
+  const fav = pos ? { ...props.fav, lat: pos.lat, lng: pos.lng } : props.fav;
+  return <Scope {...props} fav={fav} gpsAcc={props.fav.gps ? (pos?.acc ?? null) : undefined} />;
 }
 
 // ── Teilen: Favorit als Link (?fav=lat,lon,Radius,Höhe von,Höhe bis,Name) ──
@@ -649,8 +763,8 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
     } catch (e) { if ((e as Error).name === 'AbortError') return; }
     try { await navigator.clipboard.writeText(url); setGpsMsg('Link kopiert'); } catch { window.prompt('Link zum Radar:', url); }
   };
-  const add = (lat: number, lng: number) => {
-    const f: Favorite = { id: Date.now().toString(36), name: `Favorit ${favs.length + 1}`, lat, lng, radiusNm: 25, altMin: 0, altMax: 45000 };
+  const add = (lat: number, lng: number, gps = false) => {
+    const f: Favorite = { id: Date.now().toString(36), name: gps ? 'Mein Standort' : `Favorit ${favs.length + 1}`, lat, lng, radiusNm: 25, altMin: 0, altMax: 45000, ...(gps ? { gps: true } : {}) };
     setFavs((l) => [...l, f]);
     setPref({ selected: f.id, layout: 'single' });
     setEdit(true);
@@ -659,7 +773,7 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
     if (!navigator.geolocation) { setGpsMsg('GPS nicht verfügbar'); return; }
     setGpsMsg('GPS sucht…');
     navigator.geolocation.getCurrentPosition(
-      (pos) => { setGpsMsg(`GPS ±${Math.round(pos.coords.accuracy)} m`); add(pos.coords.latitude, pos.coords.longitude); },
+      (pos) => { setGpsMsg(`GPS ±${Math.round(pos.coords.accuracy)} m`); add(pos.coords.latitude, pos.coords.longitude, true); },
       (err) => setGpsMsg(err.code === err.PERMISSION_DENIED ? 'GPS nicht erlaubt' : 'Standort nicht gefunden'),
       { enableHighAccuracy: true, timeout: 15000 },
     );
@@ -722,10 +836,10 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
       {grid ? (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 260 : 340}px, 1fr))`, gap: 14 }}>
           {favs.map((f) => (
-            <Scope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} trail={prefs.trail} trailAlpha={prefs.trailAlpha} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
+            <LiveScope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} trail={prefs.trail} trailAlpha={prefs.trailAlpha} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
           ))}
         </div>
-      ) : current && <Scope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} trail={prefs.trail} trailAlpha={prefs.trailAlpha} pollMs={5000} compact={false} />}
+      ) : current && <LiveScope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} trail={prefs.trail} trailAlpha={prefs.trailAlpha} pollMs={5000} compact={false} />}
 
       <div style={{ fontSize: 10, color: '#3a6a4a', marginTop: 10 }}>
         Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe in 100 ft, Trend, Geschwindigkeit in 10 kt / Typ · VEKTOR = Strich bis zur Position in 1 min · Symbole in echter Größe und Triebwerkszahl ·

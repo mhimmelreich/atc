@@ -141,7 +141,7 @@ export function App() {
   useEffect(() => { void loadTelephony(); }, []);
   // Im WATCH schaltet FUNK die Sprachausgabe, sonst VOICE
   const speak = watching ? radioPrefs.watch : radioPrefs.voice;
-  useEffect(() => { voice.setEnabled(speak); }, [voice, speak]);
+
   const [audioBlocked, setAudioBlocked] = useState(false);
   useEffect(() => { voice.onBlocked = setAudioBlocked; return () => { voice.onBlocked = null; }; }, [voice]);
   useEffect(() => {
@@ -170,6 +170,16 @@ export function App() {
   // Geteilter Favorit (?fav=…) öffnet direkt sein Radar
   const [sharedFav, setSharedFav] = useState(() => favFromUrl(window.location.search));
   const [showFav, setShowFav] = useState(() => sharedFav !== null);
+  // Favoriten-Radar: nur echte Daten, das Spiel dahinter bleibt stumm (Funk aus, Warteschlange leer)
+  useEffect(() => { voice.setEnabled(speak && !showFav); if (showFav) voice.clear(); }, [voice, speak, showFav]);
+  // Spiel anhalten, solange das Favoriten-Radar offen ist (danach wie vorher)
+  const pausedByFav = useRef(false);
+  useEffect(() => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    if (showFav && !gameState.paused) { eng.pause(); pausedByFav.current = true; }
+    if (!showFav && pausedByFav.current) { eng.resume(); pausedByFav.current = false; }
+  }, [showFav]);
   const closeFav = () => {
     setShowFav(false);
     setSharedFav(null);
@@ -271,7 +281,7 @@ export function App() {
   // WATCH mit GPS: Verkehr rund um den Zuschauer
   const spectator = watching ? gameState.spectator : null;
   useEffect(() => {
-    if (gameState.trafficMode === 'sim' || !airport) return;
+    if (gameState.trafficMode === 'sim' || !airport || showFav) return; // Favoriten-Radar fragt selbst ab
     const center = spectator ?? airport;
     let stopped = false;
     let busy = false;
@@ -290,7 +300,7 @@ export function App() {
     void poll();
     const id = setInterval(poll, LIVE_POLL_MS);
     return () => { stopped = true; clearInterval(id); };
-  }, [gameState.trafficMode, airport, spectator]);
+  }, [gameState.trafficMode, airport, spectator, showFav]);
 
   // ── WATCH: Filter ALLE / IN / OUT für Liste und Radar ──
   const [watchFilter, setWatchFilter] = useState<WatchFilter>(() => {

@@ -360,6 +360,7 @@ router.get('/area', async (req, res) => {
 router.get('/nearest', async (req, res) => {
   const lat = Number(req.query.lat);
   const lon = Number(req.query.lon);
+  const any = req.query.any === '1';
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
     res.status(400).json({ error: 'lat und lon fehlen' });
     return;
@@ -374,12 +375,13 @@ router.get('/nearest', async (req, res) => {
   // Nur Plätze mit ICAO-Code und Linienverkehr (große und mittlere Flughäfen)
   let best: { row: Row; dist: number } | null = null;
   for (const a of new Set(d.airports.values())) {
-    if (!a.icao_code || a.scheduled_service !== 'yes' || (a.type !== 'large_airport' && a.type !== 'medium_airport')) continue;
+    // any=1 (Favoriten-Radar, Startplatz aus der Flugbahn): auch kleine Plätze ohne Linienverkehr
+    if (any ? !AREA_TYPES[a.type] || !(a.icao_code || a.gps_code) : !a.icao_code || a.scheduled_service !== 'yes' || (a.type !== 'large_airport' && a.type !== 'medium_airport')) continue;
     const dist = distanceNM(lat, lon, Number(a.latitude_deg), Number(a.longitude_deg));
     if (!best || dist < best.dist) best = { row: a, dist };
   }
   if (!best) { res.status(404).json({ error: 'Kein Flughafen gefunden' }); return; }
-  res.json({ icao: best.row.icao_code, name: best.row.name, distNM: Math.round(best.dist * 10) / 10 });
+  res.json({ icao: best.row.icao_code || best.row.gps_code, name: best.row.name, distNM: Math.round(best.dist * 10) / 10 });
 });
 
 // ── Route ────────────────────────────────────────────────────────────────────
