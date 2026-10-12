@@ -20,6 +20,8 @@ export interface LiveAircraft {
   squawk?: string;
   /** Im Autopiloten gewählte Höhe (MCP/FCU), also die zuletzt freigegebene Höhe */
   selAltFt?: number;
+  /** ADS-B-Kategorie (A1 leicht … A5 schwer, A7 Hubschrauber, B1 Segler …) */
+  category?: string;
   /** Flugroute als ICAO-Kette, z. B. "EIDW-EDDF" (falls bekannt) */
   route?: string;
   /** Zeitpunkt der Position (Date.now()) */

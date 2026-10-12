@@ -13,6 +13,7 @@ const UPSTREAM = 'https://api.adsb.lol/v2/point';
 const USER_AGENT = 'atc-game (games.himmelreich.cloud)';
 const RADIUS_NM = 120;
 const TTL_MS = 5000;
+const REUSE_MS = 10_000; // Favoriten-Radar darf eine etwas ältere Abfrage in der Nähe mitbenutzen
 const MAX_POS_AGE_S = 30; // ältere Positionen sind kein brauchbares Radarziel mehr
 const RETRY_AFTER_MS = 15_000; // nach einem Fehler adsb.lol eine Weile in Ruhe lassen
 const STALE_MS = 30_000;       // so lange darf bei Fehlern der letzte Stand ausgeliefert werden
@@ -59,6 +60,8 @@ export interface LiveAircraftDto {
   squawk?: string;
   /** Im Autopiloten gewählte Höhe (MCP/FCU), also die zuletzt freigegebene Höhe */
   selAltFt?: number;
+  /** ADS-B-Kategorie (A1 leicht … A5 schwer, A7 Hubschrauber, B1 Segler …) */
+  category?: string;
   /** Flugroute als ICAO-Kette, z. B. "EIDW-EDDF" (nur wenn bekannt und zur Position passend) */
   route?: string;
   /** Alter der Position in Sekunden zum Zeitpunkt der Antwort */
@@ -68,6 +71,8 @@ export interface LiveAircraftDto {
 export interface Snapshot {
   fetchedAt: number;
   aircraft: Array<Omit<LiveAircraftDto, 'age'> & { seenPos: number }>;
+  /** Übriger Verkehr (Kleinflieger, Hubschrauber …), nur fürs Favoriten-Radar */
+  others: Snapshot['aircraft'];
 }
 
 const cache = new Map<string, { snapshot?: Snapshot; pending?: Promise<Snapshot | undefined>; failedAt?: number }>();
@@ -112,6 +117,13 @@ function lookupRoutes(aircraft: Snapshot['aircraft']): void {
     .finally(() => { routeLookup = null; });
 }
 
+function distNm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const r = Math.PI / 180;
+  const a = Math.sin(((lat2 - lat1) * r) / 2) ** 2
+    + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2;
+  return 2 * 3440.065 * Math.asin(Math.sqrt(a));
+}
+
 function allowUpstream(now: number): boolean {
   upstreamCalls = upstreamCalls.filter((t) => now - t < 60_000);
   if (upstreamCalls.length >= UPSTREAM_PER_MIN) return false;
@@ -130,10 +142,12 @@ function isRelevant(a: RawAircraft, callsign: string): boolean {
   return /^A[2-6]$/.test(cat) || AIRLINE_CALLSIGN.test(callsign);
 }
 
-function mapAircraft(a: RawAircraft): Snapshot['aircraft'][number] | null {
+function mapAircraft(a: RawAircraft): (Snapshot['aircraft'][number] & { relevant: boolean }) | null {
   if (typeof a.lat !== 'number' || typeof a.lon !== 'number' || (a.seen_pos ?? 0) > MAX_POS_AGE_S) return null;
   const callsign = (a.flight ?? '').trim() || a.r || a.hex.toUpperCase();
-  if (!isRelevant(a, callsign)) return null;
+  // Bodenfahrzeuge, Hindernisse und Ballone sind kein Luftverkehr
+  if (/^(C|B2)/.test(a.category ?? '')) return null;
+  const relevant = isRelevant(a, callsign);
   const ground = a.alt_baro === 'ground';
   const track = a.track ?? a.true_heading;
   return {
@@ -151,7 +165,9 @@ function mapAircraft(a: RawAircraft): Snapshot['aircraft'][number] | null {
     ...(a.squawk ? { squawk: a.squawk } : {}),
     // Gerät meldet z. B. 4992 statt 5000: auf 100 ft runden
     ...(typeof a.nav_altitude_mcp === 'number' && a.nav_altitude_mcp > 0 ? { selAltFt: Math.round(a.nav_altitude_mcp / 100) * 100 } : {}),
+    ...(a.category ? { category: a.category } : {}),
     seenPos: a.seen_pos ?? 0,
+    relevant,
   };
 }
 
@@ -162,15 +178,32 @@ async function fetchSnapshot(lat: number, lon: number): Promise<Snapshot> {
   });
   if (!res.ok) throw new Error(`adsb.lol HTTP ${res.status}`);
   const data = await res.json() as { ac?: RawAircraft[] };
-  const aircraft = (data.ac ?? []).map(mapAircraft).filter((a): a is NonNullable<typeof a> => a !== null);
-  return { fetchedAt: Date.now(), aircraft };
+  const aircraft: Snapshot['aircraft'] = [];
+  const others: Snapshot['aircraft'] = [];
+  for (const raw of data.ac ?? []) {
+    const m = mapAircraft(raw);
+    if (!m) continue;
+    const { relevant, ...a } = m;
+    (relevant ? aircraft : others).push(a);
+  }
+  return { fetchedAt: Date.now(), aircraft, others };
 }
 
 /**
  * Verkehr um einen Punkt: gemeinsamer Zwischenspeicher für alle Spieler und die Tagesaufzeichnung,
  * undefined, wenn nichts Brauchbares da ist (Fehler und auch der letzte Stand zu alt)
  */
-export async function snapshotAt(lat: number, lon: number): Promise<Snapshot | undefined> {
+export async function snapshotAt(lat: number, lon: number, needNm?: number): Promise<Snapshot | undefined> {
+  // Favoriten-Radar mit kleinerem Umkreis: eine frische Abfrage in der Nähe, die ihn ganz abdeckt, mitbenutzen
+  // (schont das Abfrage-Limit bei adsb.lol, wenn mehrere Favoriten nah beieinander liegen)
+  if (needNm !== undefined) {
+    const now = Date.now();
+    for (const [k, v] of cache) {
+      if (!v.snapshot || now - v.snapshot.fetchedAt > REUSE_MS) continue;
+      const [cLat, cLon] = k.split(',').map(Number);
+      if (distNm(lat, lon, cLat, cLon) + needNm <= RADIUS_NM) return v.snapshot;
+    }
+  }
   // Auf 0,05° (≈ 3 NM) gerundet: Spieler und Tagesaufzeichnung am selben Platz teilen sich eine Abfrage,
   // auch wenn ihre Platzkoordinaten (Navigraph, OurAirports) leicht abweichen; bei 120 NM Umkreis egal
   const qLat = Math.round(lat * 20) / 20;
@@ -218,7 +251,10 @@ router.get('/', async (req, res) => {
     res.status(400).json({ error: 'lat und lon fehlen' });
     return;
   }
-  const snapshot = await snapshotAt(lat, lon);
+  // Favoriten-Radar: nm = gewünschter Umkreis, all=1 auch Kleinflieger, Hubschrauber, Segler
+  const nm = Number(req.query.nm);
+  const all = req.query.all === '1';
+  const snapshot = await snapshotAt(lat, lon, Number.isFinite(nm) && nm > 0 && nm <= RADIUS_NM ? nm : undefined);
   if (!snapshot) {
     res.status(503).json({ error: 'Live-Verkehr nicht verfügbar' });
     return;
@@ -228,7 +264,7 @@ router.get('/', async (req, res) => {
   res.json({
     source: 'adsb.lol',
     license: 'ODbL 1.0',
-    aircraft: snapshot.aircraft.map(({ seenPos, ...a }) => {
+    aircraft: (all ? [...snapshot.aircraft, ...snapshot.others] : snapshot.aircraft).map(({ seenPos, ...a }) => {
       const route = routes.get(a.callsign)?.codes;
       return { ...a, ...(route ? { route } : {}), age: Math.round((seenPos + sinceFetch) * 10) / 10 };
     }),

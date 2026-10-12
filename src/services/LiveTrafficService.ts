@@ -4,8 +4,10 @@ import type { LiveAircraft } from '@/types/live';
 
 export const LIVE_POLL_MS = 5000;
 
-export async function fetchLiveTraffic(lat: number, lng: number): Promise<LiveAircraft[]> {
-  const res = await fetch(`${import.meta.env.BASE_URL}api/traffic?lat=${lat.toFixed(2)}&lon=${lng.toFixed(2)}`);
+/** opts (Favoriten-Radar): nm = benötigter Umkreis, all = auch Kleinflieger, Hubschrauber, Segler */
+export async function fetchLiveTraffic(lat: number, lng: number, opts?: { nm: number; all: boolean }): Promise<LiveAircraft[]> {
+  const extra = opts ? `&nm=${Math.ceil(opts.nm)}${opts.all ? '&all=1' : ''}` : '';
+  const res = await fetch(`${import.meta.env.BASE_URL}api/traffic?lat=${lat.toFixed(2)}&lon=${lng.toFixed(2)}${extra}`);
   if (!res.ok) throw new Error(`Live-Verkehr: HTTP ${res.status}`);
   const data = await res.json() as { aircraft: Array<Omit<LiveAircraft, 'ts'> & { age: number }> };
   const now = Date.now();

@@ -16,6 +16,7 @@ import { ContextMenu, type ContextMenuState } from './ContextMenu';
 import { WatchMenu, type WatchMenuState } from './WatchMenu';
 import { RadioLog } from './RadioLog';
 import { HowTo } from './HowTo';
+import { FavRadar } from './FavRadar';
 import { StationPanel } from './StationPanel';
 import { WatchPanel } from './WatchPanel';
 import { RadioVoice } from '@/services/RadioVoice';
@@ -166,6 +167,7 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [watchMenu, setWatchMenu] = useState<WatchMenuState | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [showFav, setShowFav] = useState(false);
   const closeHelp = useCallback(() => setShowHelp(false), []);
 
   useEffect(() => {
@@ -529,7 +531,10 @@ export function App() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <a href="https://games.himmelreich.cloud/" style={{ color: '#446644', fontSize: 11, letterSpacing: 1, textDecoration: 'none', whiteSpace: 'nowrap' }}>← ALLE SPIELE</a>
-        <button onClick={() => setShowHelp(true)} title="Was macht ein Lotse? Befehle, Funk, Punkte" style={HELP_BUTTON}>? HOWTO</button>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <button onClick={() => setShowFav(true)} title="Favoriten-Radar: Verkehr rund um eigene Orte" style={HELP_BUTTON}>★ FAV</button>
+          <button onClick={() => setShowHelp(true)} title="Was macht ein Lotse? Befehle, Funk, Punkte" style={HELP_BUTTON}>? HOWTO</button>
+        </div>
       </div>
 
       {/* Airport selector */}
@@ -851,6 +856,7 @@ export function App() {
               <span style={{ color: gameState.score >= 0 ? '#00ff88' : '#ff3333' }}>{gameState.score}</span>
               <span>{gameState.landings} LND</span>
             </>}
+            <button onClick={() => setShowFav(true)} title="Favoriten-Radar" style={HELP_BUTTON}>★</button>
             <button onClick={() => setShowHelp(true)} title="HowTo" style={HELP_BUTTON}>?</button>
             <button onClick={() => setBottomOpen((o) => !o)} style={{ background: bottomOpen ? '#0a2a18' : 'transparent', border: '1px solid #1a4428', color: '#00cc66', padding: '2px 8px', fontFamily: '"Courier New", monospace', fontSize: 11, cursor: 'pointer', borderRadius: 2 }}>
               {bottomOpen ? '▲ RADAR' : '▼ CTRL'}
@@ -933,6 +939,7 @@ export function App() {
       {(!isMobile || bottomOpen) && sidebar}
 
       {showHelp && <HowTo onClose={closeHelp} />}
+      {showFav && <FavRadar onClose={() => setShowFav(false)} isMobile={isMobile} />}
     </div>
   );
 }
