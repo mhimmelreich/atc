@@ -144,11 +144,12 @@ export interface AreaAirport {
   lng: number;
   kind: 'L' | 'M' | 'S';
   runways: Array<[number, number, number, number, string]>;
+  elevFt: number;
 }
 
 export async function fetchAreaAirports(lat: number, lng: number, nm: number): Promise<AreaAirport[]> {
   const res = await fetch(`${import.meta.env.BASE_URL}api/opendata/area?lat=${lat.toFixed(3)}&lon=${lng.toFixed(3)}&nm=${Math.ceil(nm)}`);
   if (!res.ok) throw new Error(`Flugplätze: HTTP ${res.status}`);
-  const data = await res.json() as { airports: Array<[string, string, number, number, AreaAirport['kind'], AreaAirport['runways']]> };
-  return data.airports.map(([ident, name, alat, alng, kind, runways]) => ({ ident, name, lat: alat, lng: alng, kind, runways }));
+  const data = await res.json() as { airports: Array<[string, string, number, number, AreaAirport['kind'], AreaAirport['runways'], number?]> };
+  return data.airports.map(([ident, name, alat, alng, kind, runways, elevFt]) => ({ ident, name, lat: alat, lng: alng, kind, runways, elevFt: elevFt ?? 0 }));
 }

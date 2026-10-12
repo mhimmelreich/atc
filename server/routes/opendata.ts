@@ -279,7 +279,7 @@ router.get('/names', async (req, res) => {
   res.json(names);
 });
 
-// Flugplätze mit Bahnen im Umkreis (Favoriten-Radar): [Kennung, Name, lat, lon, Art, Bahnen [lat1, lon1, lat2, lon2, Bezeichnung]]
+// Flugplätze mit Bahnen im Umkreis (Favoriten-Radar): [Kennung, Name, lat, lon, Art, Bahnen [lat1, lon1, lat2, lon2, Bezeichnung], Höhe ft]
 const AREA_TYPES: Record<string, string> = { large_airport: 'L', medium_airport: 'M', small_airport: 'S' };
 router.get('/area', async (req, res) => {
   const lat = Number(req.query.lat);
@@ -296,7 +296,7 @@ router.get('/area', async (req, res) => {
     res.status(503).json({ error: 'Flughafendaten nicht verfügbar' });
     return;
   }
-  const out: Array<[string, string, number, number, string, Array<[number, number, number, number, string]>]> = [];
+  const out: Array<[string, string, number, number, string, Array<[number, number, number, number, string]>, number]> = [];
   for (const a of new Set(d.airports.values())) {
     const kind = AREA_TYPES[a.type];
     if (!kind) continue;
@@ -317,7 +317,7 @@ router.get('/area', async (req, res) => {
       rwys.push([aLat - dLat, aLon - dLon, aLat + dLat, aLon + dLon, name]);
     }
     const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
-    out.push([a.icao_code || a.gps_code || a.ident, a.name, aLat, aLon, kind, rwys.map(([a1, b1, a2, b2, n]) => [r6(a1), r6(b1), r6(a2), r6(b2), n])]);
+    out.push([a.icao_code || a.gps_code || a.ident, a.name, aLat, aLon, kind, rwys.map(([a1, b1, a2, b2, n]) => [r6(a1), r6(b1), r6(a2), r6(b2), n]), Number(a.elevation_ft) || 0]);
   }
   res.setHeader('Cache-Control', 'public, max-age=86400');
   res.json({ airports: out });

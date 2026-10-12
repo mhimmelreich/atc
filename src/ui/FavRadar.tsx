@@ -4,6 +4,9 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { fetchLiveTraffic } from '@/services/LiveTrafficService';
 import { fetchAreaAirports, type AreaAirport } from '@/services/AirportDataService';
+import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
+import { estimateHearing, AUDIBLE_DBA, type HearResult } from '@/game/Hearing';
+import type { Weather } from '@/types/weather';
 import { airlineName } from '@/game/Airlines';
 import { aircraftSilhouette } from '@/game/aircraftSymbol';
 import type { LiveAircraft } from '@/types/live';
@@ -21,7 +24,7 @@ export interface Favorite {
   altMax: number;
 }
 
-interface Prefs { layout: 'single' | 'grid'; ga: boolean; selected: string | null }
+interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; selected: string | null }
 
 const FAV_KEY = 'atc-favorites-v1';
 const PREF_KEY = 'atc-favradar-v1';
@@ -31,14 +34,14 @@ const VECTOR_MIN = 1;        // Geschwindigkeitsvektor: Position in 1 min
 const EMERGENCY: Record<string, string> = { '7500': 'HIJACK', '7600': 'RADIO', '7700': 'EMERG' };
 const C = {
   bg: '#020a04', ring: '#0f3a1c', ringText: '#2f7a4a', rose: '#2f7a4a',
-  airline: '#7dffb4', ga: '#d6d27a', sel: '#78d7ff', emerg: '#ff4444', text: '#9fc8a8',
+  airline: '#7dffb4', hear: '#ffd27a', ga: '#d6d27a', sel: '#78d7ff', emerg: '#ff4444', text: '#9fc8a8',
 };
 
 function loadFavs(): Favorite[] {
   try { const v = JSON.parse(localStorage.getItem(FAV_KEY) ?? '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
 }
 function loadPrefs(): Prefs {
-  try { return { layout: 'single', ga: true, selected: null, ...JSON.parse(localStorage.getItem(PREF_KEY) ?? '{}') }; } catch { return { layout: 'single', ga: true, selected: null }; }
+  try { return { layout: 'single', ga: true, hear: false, selected: null, ...JSON.parse(localStorage.getItem(PREF_KEY) ?? '{}') }; } catch { return { layout: 'single', ga: true, hear: false, selected: null }; }
 }
 function save(key: string, v: unknown) { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* privates Fenster */ } }
 
@@ -90,8 +93,8 @@ function ringStep(r: number): number {
 }
 
 // ── Ein rundes Radarbild ─────────────────────────────────────────────────────
-function Scope({ fav, ga, pollMs, compact, onSelectFav }: {
-  fav: Favorite; ga: boolean; pollMs: number; compact: boolean; onSelectFav?: () => void;
+function Scope({ fav, ga, hear, pollMs, compact, onSelectFav }: {
+  fav: Favorite; ga: boolean; hear: boolean; pollMs: number; compact: boolean; onSelectFav?: () => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -104,7 +107,7 @@ function Scope({ fav, ga, pollMs, compact, onSelectFav }: {
   const [fields, setFields] = useState<AreaAirport[]>([]);
   useEffect(() => {
     let alive = true;
-    fetchAreaAirports(fav.lat, fav.lng, fav.radiusNm).then((a) => { if (alive) setFields(a); }).catch(() => { if (alive) setFields([]); });
+    fetchAreaAirports(fav.lat, fav.lng, Math.max(fav.radiusNm, 30)).then((a) => { if (alive) setFields(a); }).catch(() => { if (alive) setFields([]); });
     return () => { alive = false; };
   }, [fav.lat, fav.lng, fav.radiusNm]);
   const history = useRef(new Map<string, Array<{ lat: number; lng: number }>>());
@@ -148,7 +151,23 @@ function Scope({ fav, ga, pollMs, compact, onSelectFav }: {
   }, [fav.lat, fav.lng, fav.radiusNm, pollMs]);
 
   // Ziele jede Sekunde weiterrechnen
-  useEffect(() => { const id = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(id); }, []);
+  // HÖREN: das wahrscheinlich hörbare Ziel pulsiert, dafür flüssiger zeichnen
+  useEffect(() => { const id = setInterval(() => tick((n) => n + 1), hear ? 66 : 1000); return () => clearInterval(id); }, [hear]);
+
+  // Wind und QNH vom nächsten großen oder mittleren Platz (METAR), Bodenhöhe vom nächsten Platz
+  const near = (kinds: string) => fields.filter((f) => kinds.includes(f.kind))
+    .map((f) => ({ f, d: distanceNM(fav.lat, fav.lng, f.lat, f.lng) })).sort((x, y) => x.d - y.d)[0]?.f;
+  const metarField = near('LM');
+  const groundField = near('LMS');
+  const [wx, setWx] = useState<Weather | null>(null);
+  useEffect(() => {
+    if (!hear || !metarField) { setWx(null); return; }
+    let alive = true;
+    const load = () => fetchWeather(metarField.ident).then((w) => { if (alive) setWx(w); });
+    load();
+    const id = setInterval(load, WEATHER_POLL_MS);
+    return () => { alive = false; clearInterval(id); };
+  }, [hear, metarField?.ident]);
 
   const now = Date.now();
   const visible = traffic
@@ -157,6 +176,12 @@ function Scope({ fav, ga, pollMs, compact, onSelectFav }: {
     .filter((v) => v.dist <= fav.radiusNm)
     .sort((x, y) => x.dist - y.dist);
   const selected = visible.find((v) => v.a.hex === selHex) ?? null;
+  // Hören zählt unabhängig von Höhenband und Radius (Schall kennt keine Filter), GA-Schalter gilt
+  const heard = hear ? estimateHearing(traffic.filter((a) => ga || !isGa(a)), {
+    lat: fav.lat, lng: fav.lng, elevFt: groundField?.elevFt ?? 0,
+    windFrom: wx?.windDir ?? null, windKt: wx?.windKt ?? 0, qnh: wx?.qnh ?? null,
+  }, now) : [];
+  const loudest = heard[0] && heard[0].dba >= AUDIBLE_DBA ? heard[0] : null;
 
   // Zeichnen
   useEffect(() => {
@@ -268,14 +293,21 @@ function Scope({ fav, ga, pollMs, compact, onSelectFav }: {
         ctx.strokeStyle = col; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(q.x, q.y); ctx.stroke();
       }
-      // Symbol
+      // Symbol; das wahrscheinlich gehörte Ziel pulsiert
+      const pulse = loudest?.hex === a.hex ? (1 + Math.sin(now / 250)) / 2 : null;
+      if (pulse !== null) {
+        ctx.strokeStyle = C.hear; ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 0.35 + 0.5 * pulse;
+        ctx.beginPath(); ctx.arc(x, y, 11 + 5 * pulse, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate((((a.track ?? 0) * Math.PI) / 180));
-      aircraftSilhouette(ctx, isGa(a) ? 5 : 7);
+      aircraftSilhouette(ctx, (isGa(a) ? 5 : 7) * (pulse !== null ? 1 + 0.2 * pulse : 1));
       ctx.fillStyle = col; ctx.fill();
       ctx.restore();
-      // Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe (FL) Trend Geschwindigkeit (kt/10) / Typ
+      // Datenblock: Rufzeichen / Höhe (FL) Trend Geschwindigkeit (kt/10) / Typ
       const trend = a.vs === null || Math.abs(a.vs) < 300 ? ' ' : a.vs > 0 ? '↑' : '↓';
       const l2 = `${a.ground || a.altFt === null ? 'GND' : fl3(a.altFt)}${trend}${a.gs !== null ? String(Math.round(a.gs / 10)).padStart(2, '0') : ''}`;
       ctx.fillStyle = col;
@@ -309,6 +341,7 @@ function Scope({ fav, ga, pollMs, compact, onSelectFav }: {
         </span>
       </div>
       <canvas ref={canvasRef} onClick={onClick} style={{ width: size, height: size, cursor: 'crosshair' }} />
+      {hear && <HearPanel heard={heard} traffic={traffic} visible={new Set(visible.map((v) => v.a.hex))} wx={wx} field={metarField?.ident} compact={compact} onSelect={setSelHex} />}
       {selected && <Details v={selected} fav={fav} onClose={() => setSelHex(null)} />}
       {!compact && !selected && visible.length > 0 && (
         <div style={{ width: '100%', maxWidth: size, fontSize: 11, color: C.text, marginTop: 4 }}>
@@ -323,6 +356,29 @@ function Scope({ fav, ga, pollMs, compact, onSelectFav }: {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function HearPanel({ heard, traffic, visible, wx, field, compact, onSelect }: {
+  heard: HearResult[]; traffic: LiveAircraft[]; visible: Set<string>; wx: Weather | null; field?: string; compact: boolean; onSelect: (hex: string) => void;
+}) {
+  const byHex = new Map(traffic.map((a) => [a.hex, a]));
+  const top = heard.filter((h) => h.dba >= AUDIBLE_DBA).slice(0, compact ? 1 : 3);
+  const wind = !wx ? 'Wind unbekannt' : wx.windDir === null ? `Wind umlaufend ${wx.windKt} kt` : `Wind ${String(wx.windDir).padStart(3, '0')}°/${wx.windKt} kt`;
+  return (
+    <div style={{ width: '100%', maxWidth: 420, fontSize: 11, color: C.text, marginTop: 4 }}>
+      <div style={{ color: C.hear }}>HÖREN · {wind}{wx && field ? ` (${field})` : ''}</div>
+      {top.length === 0 && <div>Vermutlich ist gerade kein Flieger zu hören (alle unter {AUDIBLE_DBA} dB(A)).</div>}
+      {top.map((h, i) => {
+        const a = byHex.get(h.hex);
+        return (
+          <div key={h.hex} onClick={() => onSelect(h.hex)} style={{ cursor: 'pointer', color: i === 0 ? C.hear : C.text }}>
+            {i === 0 ? '♪ ' : '  '}{a?.callsign ?? h.hex} {a?.type ?? ''} · ≈{Math.round(h.dba)} dB(A) · {Math.round(h.p * 100)} % · Schall {Math.round(h.delayS)} s unterwegs
+            {!visible.has(h.hex) && ' · außerhalb Anzeige'}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -458,6 +514,7 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
           <button key={l} onClick={() => setPref({ layout: l })} style={{ ...BTN, ...(prefs.layout === l ? ACTIVE : {}) }}>{l === 'single' ? 'EINZELN' : 'ALLE'}</button>
         ))}
         <button onClick={() => setPref({ ga: !prefs.ga })} style={{ ...BTN, ...(prefs.ga ? ACTIVE : {}) }} title="Kleinflieger, Hubschrauber, Segler zeigen">GA</button>
+        <button onClick={() => setPref({ hear: !prefs.hear })} style={{ ...BTN, ...(prefs.hear ? { ...ACTIVE, color: C.hear, borderColor: '#aa8844' } : {}) }} title="Schätzen, welchen Flieger man am Favoriten gerade hört (Wind, Höhe, Tempo)">♪ HÖREN</button>
         {current && !grid && <button onClick={() => setEdit((e) => !e)} style={{ ...BTN, ...(edit ? ACTIVE : {}) }}>EINSTELLEN</button>}
         {current && !grid && <button onClick={() => void share(current)} style={BTN} title="Link zu diesem Radar teilen oder kopieren">TEILEN</button>}
         {current?.id === 'shared' && <button onClick={saveShared} style={{ ...BTN, color: '#ff9ed8', borderColor: '#aa4488' }} title="Geteilten Favoriten in diesem Browser speichern">★ SPEICHERN</button>}
@@ -486,10 +543,10 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
       {grid ? (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 260 : 340}px, 1fr))`, gap: 14 }}>
           {favs.map((f) => (
-            <Scope key={f.id} fav={f} ga={prefs.ga} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
+            <Scope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
           ))}
         </div>
-      ) : current && <Scope key={current.id} fav={current} ga={prefs.ga} pollMs={5000} compact={false} />}
+      ) : current && <Scope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} pollMs={5000} compact={false} />}
 
       <div style={{ fontSize: 10, color: '#3a6a4a', marginTop: 10 }}>
         Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe in 100 ft, Trend, Geschwindigkeit in 10 kt / Typ · Strich = Geschwindigkeitsvektor (Position in 1 min) ·
