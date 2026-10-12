@@ -16,7 +16,7 @@ import { ContextMenu, type ContextMenuState } from './ContextMenu';
 import { WatchMenu, type WatchMenuState } from './WatchMenu';
 import { RadioLog } from './RadioLog';
 import { HowTo } from './HowTo';
-import { FavRadar } from './FavRadar';
+import { FavRadar, favFromUrl } from './FavRadar';
 import { StationPanel } from './StationPanel';
 import { WatchPanel } from './WatchPanel';
 import { RadioVoice } from '@/services/RadioVoice';
@@ -167,7 +167,15 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [watchMenu, setWatchMenu] = useState<WatchMenuState | null>(null);
   const [showHelp, setShowHelp] = useState(false);
-  const [showFav, setShowFav] = useState(false);
+  // Geteilter Favorit (?fav=…) öffnet direkt sein Radar
+  const [sharedFav, setSharedFav] = useState(() => favFromUrl(window.location.search));
+  const [showFav, setShowFav] = useState(() => sharedFav !== null);
+  const closeFav = () => {
+    setShowFav(false);
+    setSharedFav(null);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('fav')) { url.searchParams.delete('fav'); window.history.replaceState(null, '', url); }
+  };
   const closeHelp = useCallback(() => setShowHelp(false), []);
 
   useEffect(() => {
@@ -939,7 +947,7 @@ export function App() {
       {(!isMobile || bottomOpen) && sidebar}
 
       {showHelp && <HowTo onClose={closeHelp} />}
-      {showFav && <FavRadar onClose={() => setShowFav(false)} isMobile={isMobile} />}
+      {showFav && <FavRadar onClose={closeFav} isMobile={isMobile} shared={sharedFav} />}
     </div>
   );
 }

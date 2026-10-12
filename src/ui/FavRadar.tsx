@@ -373,19 +373,53 @@ function Editor({ fav, onChange, onDelete }: { fav: Favorite; onChange: (f: Favo
   );
 }
 
+// ── Teilen: Favorit als Link (?fav=lat,lon,Radius,Höhe von,Höhe bis,Name) ──
+export function favFromUrl(search: string): Favorite | null {
+  const v = new URLSearchParams(search).get('fav');
+  if (!v) return null;
+  const [lat, lng, r, lo, hi, ...name] = v.split(',');
+  const n = [lat, lng, r, lo, hi].map(Number);
+  if (n.some((x) => !Number.isFinite(x)) || Math.abs(n[0]) > 90 || Math.abs(n[1]) > 180) return null;
+  return {
+    id: 'shared', name: name.join(',').slice(0, 24) || 'Geteilt', lat: n[0], lng: n[1],
+    radiusNm: Math.min(MAX_RADIUS, Math.max(2, Math.round(n[2]))), altMin: Math.max(0, n[3]), altMax: Math.min(60000, n[4]),
+  };
+}
+
+function favUrl(f: Favorite): string {
+  const v = [f.lat.toFixed(5), f.lng.toFixed(5), f.radiusNm, f.altMin, f.altMax, f.name].join(',');
+  return `${location.origin}${import.meta.env.BASE_URL}?fav=${encodeURIComponent(v)}`;
+}
+
 // ── Gesamtansicht ─────────────────────────────────────────────────────────────
-export function FavRadar({ onClose, isMobile }: { onClose: () => void; isMobile: boolean }) {
+export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () => void; isMobile: boolean; shared?: Favorite | null }) {
   const [favs, setFavs] = useState<Favorite[]>(loadFavs);
-  const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
+  const [prefs, setPrefs] = useState<Prefs>(() => (sharedIn ? { ...loadPrefs(), selected: 'shared', layout: 'single' } : loadPrefs()));
+  // Geteilter Favorit aus dem Link: nur angezeigt, bis er gespeichert wird
+  const [shared, setShared] = useState<Favorite | null>(sharedIn ?? null);
   const [gpsMsg, setGpsMsg] = useState<string | null>(null);
   const [edit, setEdit] = useState(false);
   useEffect(() => save(FAV_KEY, favs), [favs]);
   useEffect(() => save(PREF_KEY, prefs), [prefs]);
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
 
-  const current = favs.find((f) => f.id === prefs.selected) ?? favs[0] ?? null;
+  const current: Favorite | null = (prefs.selected === 'shared' ? shared : null) ?? favs.find((f) => f.id === prefs.selected) ?? favs[0] ?? shared;
   const setPref = (p: Partial<Prefs>) => setPrefs((o) => ({ ...o, ...p }));
-  const update = (f: Favorite) => setFavs((list) => list.map((x) => (x.id === f.id ? f : x)));
+  const update = (f: Favorite) => (f.id === 'shared' ? setShared(f) : setFavs((list) => list.map((x) => (x.id === f.id ? f : x))));
+  const saveShared = () => {
+    if (!shared) return;
+    const f = { ...shared, id: Date.now().toString(36) };
+    setFavs((l) => [...l, f]);
+    setShared(null);
+    setPref({ selected: f.id });
+  };
+  const share = async (f: Favorite) => {
+    const url = favUrl(f);
+    try {
+      if (navigator.share) { await navigator.share({ title: `Radar ${f.name}`, url }); return; }
+    } catch (e) { if ((e as Error).name === 'AbortError') return; }
+    try { await navigator.clipboard.writeText(url); setGpsMsg('Link kopiert'); } catch { window.prompt('Link zum Radar:', url); }
+  };
   const add = (lat: number, lng: number) => {
     const f: Favorite = { id: Date.now().toString(36), name: `Favorit ${favs.length + 1}`, lat, lng, radiusNm: 25, altMin: 0, altMax: 45000 };
     setFavs((l) => [...l, f]);
@@ -425,21 +459,23 @@ export function FavRadar({ onClose, isMobile }: { onClose: () => void; isMobile:
         ))}
         <button onClick={() => setPref({ ga: !prefs.ga })} style={{ ...BTN, ...(prefs.ga ? ACTIVE : {}) }} title="Kleinflieger, Hubschrauber, Segler zeigen">GA</button>
         {current && !grid && <button onClick={() => setEdit((e) => !e)} style={{ ...BTN, ...(edit ? ACTIVE : {}) }}>EINSTELLEN</button>}
-        {gpsMsg && <span style={{ fontSize: 10, color: gpsMsg.startsWith('GPS ±') ? '#7fa88c' : '#ffaa00' }}>{gpsMsg}</span>}
+        {current && !grid && <button onClick={() => void share(current)} style={BTN} title="Link zu diesem Radar teilen oder kopieren">TEILEN</button>}
+        {current?.id === 'shared' && <button onClick={saveShared} style={{ ...BTN, color: '#ff9ed8', borderColor: '#aa4488' }} title="Geteilten Favoriten in diesem Browser speichern">★ SPEICHERN</button>}
+        {gpsMsg && <span style={{ fontSize: 10, color: gpsMsg.startsWith('GPS ±') || gpsMsg === 'Link kopiert' ? '#7fa88c' : '#ffaa00' }}>{gpsMsg}</span>}
         <button onClick={onClose} style={{ ...BTN, marginLeft: 'auto' }} title="Zurück (Esc)">✕</button>
       </div>
 
-      {favs.length > 1 && !grid && (
+      {favs.length + (shared ? 1 : 0) > 1 && !grid && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
-          {favs.map((f) => (
-            <button key={f.id} onClick={() => setPref({ selected: f.id })} style={{ ...BTN, ...(current?.id === f.id ? { ...ACTIVE, color: '#ff9ed8', borderColor: '#aa4488' } : {}) }}>★ {f.name}</button>
+          {[...favs, ...(shared ? [shared] : [])].map((f) => (
+            <button key={f.id} onClick={() => setPref({ selected: f.id })} style={{ ...BTN, ...(current?.id === f.id ? { ...ACTIVE, color: '#ff9ed8', borderColor: '#aa4488' } : {}) }}>{f.id === 'shared' ? '↗' : '★'} {f.name}</button>
           ))}
         </div>
       )}
 
       {current && !grid && edit && <div style={{ marginBottom: 8 }}><Editor fav={current} onChange={update} onDelete={() => remove(current.id)} /></div>}
 
-      {favs.length === 0 && (
+      {favs.length === 0 && !shared && (
         <div style={{ fontSize: 13, lineHeight: 1.6, maxWidth: 560 }}>
           Noch keine Favoriten. <b>+ GPS</b> speichert die aktuelle Position dieses Geräts, <b>+ KOORD</b> einen beliebigen Ort
           (Koordinaten z. B. per Rechtsklick in Google Maps kopieren). Für jeden Favoriten gibt es ein rundes Radarbild, Nord oben,
