@@ -11,6 +11,7 @@ import { airlineName } from '@/game/Airlines';
 import { drawPlanform, planform } from '@/game/aircraftPlanform';
 import { regCountry, typeName, typeSeats } from '@/game/aircraftInfo';
 import { LiveSmoother } from '@/game/LiveSmoother';
+import { rainImage, RAIN_CREDIT } from '@/game/RainRadar';
 import type { LiveAircraft } from '@/types/live';
 import { bearingBetween, destinationPoint, distanceNM } from '@/utils/geo';
 
@@ -28,7 +29,7 @@ export interface Favorite {
   gps?: boolean;
 }
 
-interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; trail: boolean; trailAlpha: number; selected: string | null }
+interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; trail: boolean; trailAlpha: number; rain: boolean; rainAlpha: number; selected: string | null }
 
 const FAV_KEY = 'atc-favorites-v1';
 const PREF_KEY = 'atc-favradar-v2';
@@ -51,8 +52,8 @@ function loadPrefs(): Prefs {
     const v2 = localStorage.getItem(PREF_KEY);
     const stored = JSON.parse(v2 ?? localStorage.getItem(PREF_KEY_V1) ?? '{}');
     if (!v2) delete stored.hear;
-    return { layout: 'single', ga: true, hear: true, vector: false, vectorAlpha: 0.5, trail: true, trailAlpha: 0.5, selected: null, ...stored };
-  } catch { return { layout: 'single', ga: true, hear: true, vector: false, vectorAlpha: 0.5, trail: true, trailAlpha: 0.5, selected: null }; }
+    return { layout: 'single', ga: true, hear: true, vector: false, vectorAlpha: 0.5, trail: true, trailAlpha: 0.5, rain: false, rainAlpha: 0.6, selected: null, ...stored };
+  } catch { return { layout: 'single', ga: true, hear: true, vector: false, vectorAlpha: 0.5, trail: true, trailAlpha: 0.5, rain: false, rainAlpha: 0.6, selected: null }; }
 }
 function save(key: string, v: unknown) { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* privates Fenster */ } }
 
@@ -97,10 +98,10 @@ function ringStep(r: number): number {
 }
 
 // ── Ein rundes Radarbild ─────────────────────────────────────────────────────
-function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, compact, onSelectFav, gpsAcc }: {
+function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, rain = false, rainAlpha = 0.6, pollMs, compact, onSelectFav, gpsAcc }: {
   /** GPS LIVE: Genauigkeit in m, null = noch keine Position; undefined = fester Ort */
   gpsAcc?: number | null;
-  fav: Favorite; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; trail: boolean; trailAlpha: number; pollMs: number; compact: boolean; onSelectFav?: () => void;
+  fav: Favorite; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; trail: boolean; trailAlpha: number; rain?: boolean; rainAlpha?: number; pollMs: number; compact: boolean; onSelectFav?: () => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -243,6 +244,17 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
     ctx.clearRect(0, 0, size, size);
     ctx.fillStyle = C.bg;
     ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+    // REGEN: DWD-Niederschlagsradar unter allem anderen, auf den Kreis beschnitten
+    if (rain) {
+      const r = rainImage(fav.lat, fav.lng, fav.radiusNm, compact ? 384 : 768);
+      if (r) {
+        ctx.save();
+        ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+        ctx.globalAlpha = rainAlpha;
+        ctx.drawImage(r.img, cx - R, cy - R, 2 * R, 2 * R);
+        ctx.restore();
+      }
+    }
 
     // Entfernungsringe
     const step = ringStep(fav.radiusNm);
@@ -800,7 +812,7 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
   const [shared, setShared] = useState<Favorite | null>(sharedIn ?? null);
   const [gpsMsg, setGpsMsg] = useState<string | null>(null);
   const [edit, setEdit] = useState(false);
-  const [alphaMenu, setAlphaMenu] = useState<'vector' | 'trail' | null>(null);
+  const [alphaMenu, setAlphaMenu] = useState<'vector' | 'trail' | 'rain' | null>(null);
   useEffect(() => save(FAV_KEY, favs), [favs]);
   useEffect(() => save(PREF_KEY, prefs), [prefs]);
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
@@ -866,6 +878,9 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
         <AlphaToggle label="BAHN" title="Flugbahn des gewählten Flugs seit dem Start (Rechtsklick: Deckkraft)"
           on={prefs.trail} alpha={prefs.trailAlpha} open={alphaMenu === 'trail'} onOpen={(o) => setAlphaMenu(o ? 'trail' : null)}
           onToggle={(on) => setPref({ trail: on })} onAlpha={(a) => setPref({ trailAlpha: a })} />
+        <AlphaToggle label="REGEN" title="Niederschlagsradar des DWD, alle 5 Minuten neu (Deutschland und Randgebiete; Rechtsklick: Deckkraft)"
+          on={prefs.rain} alpha={prefs.rainAlpha} open={alphaMenu === 'rain'} onOpen={(o) => setAlphaMenu(o ? 'rain' : null)}
+          onToggle={(on) => setPref({ rain: on })} onAlpha={(a) => setPref({ rainAlpha: a })} />
         <button onClick={() => setPref({ hear: !prefs.hear })} style={{ ...BTN, ...(prefs.hear ? { ...ACTIVE, color: C.hear, borderColor: '#aa8844' } : {}) }} title="Schätzen, welchen Flieger man am Favoriten gerade hört (Wind, Höhe, Tempo)">♪ HÖREN</button>
         {current && !grid && <button onClick={() => setEdit((e) => !e)} style={{ ...BTN, ...(edit ? ACTIVE : {}) }}>EINSTELLEN</button>}
         {current && !grid && <button onClick={() => void share(current)} style={BTN} title="Link zu diesem Radar teilen oder kopieren">TEILEN</button>}
@@ -895,15 +910,15 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
       {grid ? (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 260 : 340}px, 1fr))`, gap: 14 }}>
           {favs.map((f) => (
-            <LiveScope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} trail={prefs.trail} trailAlpha={prefs.trailAlpha} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
+            <LiveScope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} trail={prefs.trail} trailAlpha={prefs.trailAlpha} rain={prefs.rain} rainAlpha={prefs.rainAlpha} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
           ))}
         </div>
-      ) : current && <LiveScope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} trail={prefs.trail} trailAlpha={prefs.trailAlpha} pollMs={5000} compact={false} />}
+      ) : current && <LiveScope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} trail={prefs.trail} trailAlpha={prefs.trailAlpha} rain={prefs.rain} rainAlpha={prefs.rainAlpha} pollMs={5000} compact={false} />}
 
       <div style={{ fontSize: 10, color: '#3a6a4a', marginTop: 10 }}>
         Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe in 100 ft, Trend, Geschwindigkeit in 10 kt / Typ · VEKTOR = Strich bis zur Position in 1 min · Symbole in echter Größe und Triebwerkszahl ·
         <span style={{ color: C.airline }}> Linie</span> · <span style={{ color: C.ga }}>GA</span> · <span style={{ color: C.emerg }}>Notfall-Squawk</span> ·
-        Daten: <a href="https://adsb.lol" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>adsb.lol</a> (ODbL)
+        Daten: <a href="https://adsb.lol" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>adsb.lol</a> (ODbL){prefs.rain && <> · {RAIN_CREDIT} (<a href="https://www.dwd.de" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>dwd.de</a>)</>}
       </div>
     </div>
   );

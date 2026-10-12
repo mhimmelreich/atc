@@ -977,6 +977,7 @@ const DISPLAY_TOGGLES: { key: keyof DisplayOptions; label: string; title?: strin
   { key: 'stars',    label: 'STARs'   },
   { key: 'landmarks', label: 'BLDG', title: 'Markante Bauwerke: Hochhäuser, Türme und große Stadien (OpenStreetMap)' },
   { key: 'roads', label: 'ROADS', title: 'Autobahnen als Orientierung (OpenStreetMap)' },
+  { key: 'rain', label: 'RAIN', title: 'Niederschlagsradar des DWD, alle 5 Minuten neu (Deutschland und Randgebiete)' },
 ];
 
 interface ExtraToggle {
@@ -1006,7 +1007,7 @@ function DisplayBar({ display, onChange, extra = [] }: { display: DisplayOptions
       flexShrink: 0, flexWrap: 'wrap',
     }}>
       {DISPLAY_TOGGLES.map(({ key, label, title }) => (
-        <button key={key} title={title} onClick={() => onChange({ [key]: !display[key] })} style={toggleStyle(display[key])}>
+        <button key={key} title={title} onClick={() => onChange({ [key]: !display[key] })} style={toggleStyle(!!display[key])}>
           {label}
         </button>
       ))}

@@ -1,4 +1,5 @@
 // filepath: src/game/RadarRenderer.ts
+import { rainImage, RAIN_CREDIT } from './RainRadar';
 import type { Aircraft, ConflictPair, TrailPoint } from '@/types/aircraft';
 import type { LiveAircraft, LiveInbound } from '@/types/live';
 import { typeData } from './constants';
@@ -83,6 +84,8 @@ export interface DisplayOptions {
   landmarks: boolean;
   /** Autobahnen als Orientierungslinien */
   roads: boolean;
+  /** Niederschlagsradar des DWD */
+  rain?: boolean;
 }
 
 export const DEFAULT_DISPLAY: DisplayOptions = {
@@ -93,6 +96,7 @@ export const DEFAULT_DISPLAY: DisplayOptions = {
   stars: true,
   landmarks: true,
   roads: true,
+  rain: false,
 };
 
 export interface RenderOptions {
@@ -190,6 +194,18 @@ export class RadarRenderer {
     const apPx = ll2c(opts.airport.lat, opts.airport.lng);
 
     // ── Back → Front ────────────────────────────────────────────────────────
+    if (opts.display.rain) {
+      // Ausschnitt gerastert, damit beim Verschieben und Zoomen nicht ständig neu geladen wird
+      const rad = [60, 120, 240, 480].find((r) => r >= opts.rangeNM * 1.5) ?? 480;
+      const q = rad / 120;
+      const r = rainImage(Math.round(cLat / q) * q, Math.round(cLng / q) * q, rad, 1024);
+      if (r) {
+        const a = ll2c(r.box.north, r.box.west), b = ll2c(r.box.south, r.box.east);
+        ctx.save(); ctx.globalAlpha = 0.55;
+        ctx.drawImage(r.img, a.x, a.y, b.x - a.x, b.y - a.y);
+        ctx.restore();
+      }
+    }
     this.drawRangeRings(opts.rangeNM, scale, apPx.x, apPx.y);
     if (opts.sweepEnabled) this.drawSweep(opts.now, apPx.x, apPx.y);
 
@@ -1220,5 +1236,5 @@ export function drawLandmarks2D(
 /** Quellenhinweis (ODbL) für alles, was gerade zu sehen ist; leer, wenn nichts davon */
 export function sourceCredit(o: RenderOptions): string {
   const osm = [o.towns?.length ? 'Orte' : '', o.landmarks?.length ? 'Bauwerke' : '', o.roads?.length ? 'Autobahnen' : ''].filter(Boolean).join(', ');
-  return [o.live || o.dayTracks?.length ? 'Traffic: adsb.lol (ODbL)' : '', osm ? `${osm}: © OpenStreetMap` : ''].filter(Boolean).join(' · ');
+  return [o.live || o.dayTracks?.length ? 'Traffic: adsb.lol (ODbL)' : '', osm ? `${osm}: © OpenStreetMap` : '', o.display.rain ? RAIN_CREDIT : ''].filter(Boolean).join(' · ');
 }
