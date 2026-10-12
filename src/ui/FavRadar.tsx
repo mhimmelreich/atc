@@ -24,7 +24,7 @@ export interface Favorite {
   altMax: number;
 }
 
-interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; vector: boolean; selected: string | null }
+interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; selected: string | null }
 
 const FAV_KEY = 'atc-favorites-v1';
 const PREF_KEY = 'atc-favradar-v2';
@@ -47,8 +47,8 @@ function loadPrefs(): Prefs {
     const v2 = localStorage.getItem(PREF_KEY);
     const stored = JSON.parse(v2 ?? localStorage.getItem(PREF_KEY_V1) ?? '{}');
     if (!v2) delete stored.hear;
-    return { layout: 'single', ga: true, hear: true, vector: false, selected: null, ...stored };
-  } catch { return { layout: 'single', ga: true, hear: true, vector: false, selected: null }; }
+    return { layout: 'single', ga: true, hear: true, vector: false, vectorAlpha: 0.5, selected: null, ...stored };
+  } catch { return { layout: 'single', ga: true, hear: true, vector: false, vectorAlpha: 0.5, selected: null }; }
 }
 function save(key: string, v: unknown) { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* privates Fenster */ } }
 
@@ -100,8 +100,8 @@ function ringStep(r: number): number {
 }
 
 // ── Ein rundes Radarbild ─────────────────────────────────────────────────────
-function Scope({ fav, ga, hear, vector, pollMs, compact, onSelectFav }: {
-  fav: Favorite; ga: boolean; hear: boolean; vector: boolean; pollMs: number; compact: boolean; onSelectFav?: () => void;
+function Scope({ fav, ga, hear, vector, vectorAlpha, pollMs, compact, onSelectFav }: {
+  fav: Favorite; ga: boolean; hear: boolean; vector: boolean; vectorAlpha: number; pollMs: number; compact: boolean; onSelectFav?: () => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -305,7 +305,7 @@ function Scope({ fav, ga, hear, vector, pollMs, compact, onSelectFav }: {
           ctx.beginPath();
           ctx.moveTo(x + ((q.x - x) / len) * gap, y + ((q.y - y) / len) * gap);
           ctx.lineTo(q.x, q.y);
-          ctx.globalAlpha = 0.5; ctx.stroke(); ctx.globalAlpha = 1;
+          ctx.globalAlpha = vectorAlpha; ctx.stroke(); ctx.globalAlpha = 1;
         }
       }
       // Symbol; das wahrscheinlich gehörte Ziel pulsiert
@@ -489,6 +489,7 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
   const [shared, setShared] = useState<Favorite | null>(sharedIn ?? null);
   const [gpsMsg, setGpsMsg] = useState<string | null>(null);
   const [edit, setEdit] = useState(false);
+  const [vecMenu, setVecMenu] = useState(false);
   useEffect(() => save(FAV_KEY, favs), [favs]);
   useEffect(() => save(PREF_KEY, prefs), [prefs]);
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
@@ -548,7 +549,20 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
           <button key={l} onClick={() => setPref({ layout: l })} style={{ ...BTN, ...(prefs.layout === l ? ACTIVE : {}) }}>{l === 'single' ? 'EINZELN' : 'ALLE'}</button>
         ))}
         <button onClick={() => setPref({ ga: !prefs.ga })} style={{ ...BTN, ...(prefs.ga ? ACTIVE : {}) }} title="Kleinflieger, Hubschrauber, Segler zeigen">GA</button>
-        <button onClick={() => setPref({ vector: !prefs.vector })} style={{ ...BTN, ...(prefs.vector ? ACTIVE : {}) }} title="Geschwindigkeitsvektor: Strich bis zur Position in 1 Minute">VEKTOR</button>
+        <span style={{ position: 'relative' }}>
+          <button onClick={() => setPref({ vector: !prefs.vector })}
+            onContextMenu={(e) => { e.preventDefault(); setPref({ vector: true }); setVecMenu((o) => !o); }}
+            style={{ ...BTN, ...(prefs.vector ? ACTIVE : {}) }} title="Geschwindigkeitsvektor: Strich bis zur Position in 1 Minute (Rechtsklick: Deckkraft)">VEKTOR</button>
+          {vecMenu && prefs.vector && (
+            <div onMouseLeave={() => setVecMenu(false)} style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 5, background: '#06140c', border: '1px solid #1a4428', padding: '6px 8px', fontSize: 11, color: C.text, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+              DECKKRAFT
+              <input type="range" min={10} max={100} step={5} value={Math.round(prefs.vectorAlpha * 100)}
+                onChange={(e) => setPref({ vectorAlpha: Number(e.target.value) / 100 })} style={{ width: 110 }} />
+              <span style={{ width: 34, textAlign: 'right' }}>{Math.round(prefs.vectorAlpha * 100)} %</span>
+              <span onClick={() => setVecMenu(false)} style={{ cursor: 'pointer', color: '#4f8a60' }}>✕</span>
+            </div>
+          )}
+        </span>
         <button onClick={() => setPref({ hear: !prefs.hear })} style={{ ...BTN, ...(prefs.hear ? { ...ACTIVE, color: C.hear, borderColor: '#aa8844' } : {}) }} title="Schätzen, welchen Flieger man am Favoriten gerade hört (Wind, Höhe, Tempo)">♪ HÖREN</button>
         {current && !grid && <button onClick={() => setEdit((e) => !e)} style={{ ...BTN, ...(edit ? ACTIVE : {}) }}>EINSTELLEN</button>}
         {current && !grid && <button onClick={() => void share(current)} style={BTN} title="Link zu diesem Radar teilen oder kopieren">TEILEN</button>}
@@ -578,10 +592,10 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
       {grid ? (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 260 : 340}px, 1fr))`, gap: 14 }}>
           {favs.map((f) => (
-            <Scope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
+            <Scope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
           ))}
         </div>
-      ) : current && <Scope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} pollMs={5000} compact={false} />}
+      ) : current && <Scope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} vectorAlpha={prefs.vectorAlpha} pollMs={5000} compact={false} />}
 
       <div style={{ fontSize: 10, color: '#3a6a4a', marginTop: 10 }}>
         Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe in 100 ft, Trend, Geschwindigkeit in 10 kt / Typ · VEKTOR = Strich bis zur Position in 1 min · Symbole in echter Größe und Triebwerkszahl ·
