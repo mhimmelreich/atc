@@ -279,6 +279,50 @@ router.get('/names', async (req, res) => {
   res.json(names);
 });
 
+// Flugplätze mit Bahnen im Umkreis (Favoriten-Radar): [Kennung, Name, lat, lon, Art, Bahnen [lat1, lon1, lat2, lon2, Bezeichnung]]
+const AREA_TYPES: Record<string, string> = { large_airport: 'L', medium_airport: 'M', small_airport: 'S' };
+router.get('/area', async (req, res) => {
+  const lat = Number(req.query.lat);
+  const lon = Number(req.query.lon);
+  const nm = Math.min(120, Math.max(1, Number(req.query.nm) || 25));
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    res.status(400).json({ error: 'lat und lon fehlen' });
+    return;
+  }
+  let d: OpenData;
+  try {
+    d = await loadData();
+  } catch {
+    res.status(503).json({ error: 'Flughafendaten nicht verfügbar' });
+    return;
+  }
+  const out: Array<[string, string, number, number, string, Array<[number, number, number, number, string]>]> = [];
+  for (const a of new Set(d.airports.values())) {
+    const kind = AREA_TYPES[a.type];
+    if (!kind) continue;
+    const aLat = Number(a.latitude_deg), aLon = Number(a.longitude_deg);
+    if (Math.abs(aLat - lat) > nm / 60 + 0.1 || distanceNM(lat, lon, aLat, aLon) > nm + 2) continue;
+    const rwys: Array<[number, number, number, number, string]> = [];
+    for (const r of d.runways.get(a.ident) ?? []) {
+      const name = [r.le_ident, r.he_ident].filter(Boolean).join('/');
+      const l1 = num(r.le_latitude_deg), g1 = num(r.le_longitude_deg), l2 = num(r.he_latitude_deg), g2 = num(r.he_longitude_deg);
+      if (l1 !== null && g1 !== null && l2 !== null && g2 !== null) { rwys.push([l1, g1, l2, g2, name]); continue; }
+      // Ohne Schwellenkoordinaten (viele kleine Plätze): aus Kurs und Länge um den Bezugspunkt
+      const hdg = num(r.le_heading_degT) ?? (/^\d{1,2}/.test(r.le_ident) ? parseInt(r.le_ident, 10) * 10 : null);
+      const len = num(r.length_ft);
+      if (hdg === null || len === null || len <= 0) continue;
+      const half = len / 2 / 6076.12;
+      const dLat = (half * Math.cos((hdg * Math.PI) / 180)) / 60;
+      const dLon = (half * Math.sin((hdg * Math.PI) / 180)) / 60 / Math.cos((aLat * Math.PI) / 180);
+      rwys.push([aLat - dLat, aLon - dLon, aLat + dLat, aLon + dLon, name]);
+    }
+    const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
+    out.push([a.icao_code || a.gps_code || a.ident, a.name, aLat, aLon, kind, rwys.map(([a1, b1, a2, b2, n]) => [r6(a1), r6(b1), r6(a2), r6(b2), n])]);
+  }
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.json({ airports: out });
+});
+
 // Nächster Verkehrsflughafen zu einer Position (Zuschauer per GPS)
 router.get('/nearest', async (req, res) => {
   const lat = Number(req.query.lat);

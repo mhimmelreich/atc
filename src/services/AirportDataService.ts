@@ -135,3 +135,20 @@ function buildGenericAirport(icao: string): Airport {
     }],
   };
 }
+
+/** Flugplatz mit Bahnen im Umkreis (Favoriten-Radar, OurAirports); kind L/M/S = groß/mittel/klein */
+export interface AreaAirport {
+  ident: string;
+  name: string;
+  lat: number;
+  lng: number;
+  kind: 'L' | 'M' | 'S';
+  runways: Array<[number, number, number, number, string]>;
+}
+
+export async function fetchAreaAirports(lat: number, lng: number, nm: number): Promise<AreaAirport[]> {
+  const res = await fetch(`${import.meta.env.BASE_URL}api/opendata/area?lat=${lat.toFixed(3)}&lon=${lng.toFixed(3)}&nm=${Math.ceil(nm)}`);
+  if (!res.ok) throw new Error(`Flugplätze: HTTP ${res.status}`);
+  const data = await res.json() as { airports: Array<[string, string, number, number, AreaAirport['kind'], AreaAirport['runways']]> };
+  return data.airports.map(([ident, name, alat, alng, kind, runways]) => ({ ident, name, lat: alat, lng: alng, kind, runways }));
+}

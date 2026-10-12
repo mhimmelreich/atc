@@ -3,6 +3,7 @@
 // in Draufsicht zeigen, Nord oben, mit einstellbarem Umkreis und Höhenband. Echtverkehr von adsb.lol (ODbL).
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { fetchLiveTraffic } from '@/services/LiveTrafficService';
+import { fetchAreaAirports, type AreaAirport } from '@/services/AirportDataService';
 import { airlineName } from '@/game/Airlines';
 import { aircraftSilhouette } from '@/game/aircraftSymbol';
 import type { LiveAircraft } from '@/types/live';
@@ -100,6 +101,12 @@ function Scope({ fav, ga, pollMs, compact, onSelectFav }: {
   const [error, setError] = useState(false);
   const [selHex, setSelHex] = useState<string | null>(null);
   const [, tick] = useState(0);
+  const [fields, setFields] = useState<AreaAirport[]>([]);
+  useEffect(() => {
+    let alive = true;
+    fetchAreaAirports(fav.lat, fav.lng, fav.radiusNm).then((a) => { if (alive) setFields(a); }).catch(() => { if (alive) setFields([]); });
+    return () => { alive = false; };
+  }, [fav.lat, fav.lng, fav.radiusNm]);
   const history = useRef(new Map<string, Array<{ lat: number; lng: number }>>());
   const hits = useRef<Array<{ hex: string; x: number; y: number }>>([]);
 
@@ -193,6 +200,45 @@ function Scope({ fav, ga, pollMs, compact, onSelectFav }: {
         ctx.fillText(t, cx + (R + 8) * Math.sin(rad), cy - (R + 8) * Math.cos(rad));
       }
     }
+    // Flugplätze: Bahnen maßstäblich, Kennung daneben
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+    ctx.lineCap = 'butt'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = '10px "Courier New", monospace';
+    for (const f of fields) {
+      const big = f.kind !== 'S';
+      ctx.strokeStyle = big ? '#8fa59a' : '#62786c';
+      ctx.lineWidth = f.kind === 'L' ? 3 : f.kind === 'M' ? 2.5 : 1.5;
+      for (const [a1, b1, a2, b2] of f.runways) {
+        const p1 = toXY(a1, b1), p2 = toXY(a2, b2);
+        // Bei großem Radius wären Bahnen nur Punkte: mindestens 6 px lang
+        const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        const k = len < 6 && len > 0 ? 6 / len : 1;
+        const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+        ctx.beginPath();
+        ctx.moveTo(mx + (p1.x - mx) * k, my + (p1.y - my) * k);
+        ctx.lineTo(mx + (p2.x - mx) * k, my + (p2.y - my) * k);
+        ctx.stroke();
+      }
+      const c = toXY(f.lat, f.lng);
+      if (f.runways.length === 0) { ctx.strokeStyle = '#62786c'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(c.x, c.y, 3, 0, Math.PI * 2); ctx.stroke(); }
+      if (big || (!compact && fav.radiusNm <= 40)) {
+        ctx.fillStyle = big ? '#8fa59a' : '#62786c';
+        ctx.fillText(f.ident, c.x + 8, c.y + 8);
+      }
+    }
+    ctx.restore();
+
+    // Nordpfeil oben links
+    {
+      const nx = 22, ny = 30;
+      ctx.fillStyle = '#9fd8b0'; ctx.strokeStyle = '#9fd8b0'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(nx, ny - 14); ctx.lineTo(nx + 6, ny + 4); ctx.lineTo(nx, ny); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(nx, ny - 14); ctx.lineTo(nx - 6, ny + 4); ctx.lineTo(nx, ny); ctx.closePath(); ctx.stroke();
+      ctx.font = 'bold 12px "Courier New", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.fillText('N', nx, ny + 17);
+    }
+
     // Mitte: der Favorit
     ctx.strokeStyle = '#ff6ec7'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(cx - 6, cy); ctx.lineTo(cx + 6, cy); ctx.moveTo(cx, cy - 6); ctx.lineTo(cx, cy + 6); ctx.stroke();
@@ -229,7 +275,7 @@ function Scope({ fav, ga, pollMs, compact, onSelectFav }: {
       aircraftSilhouette(ctx, isGa(a) ? 5 : 7);
       ctx.fillStyle = col; ctx.fill();
       ctx.restore();
-      // Datenblock: Rufzeichen / Höhe (FL) Trend Geschwindigkeit (kt/10) / Typ
+      // Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe (FL) Trend Geschwindigkeit (kt/10) / Typ
       const trend = a.vs === null || Math.abs(a.vs) < 300 ? ' ' : a.vs > 0 ? '↑' : '↓';
       const l2 = `${a.ground || a.altFt === null ? 'GND' : fl3(a.altFt)}${trend}${a.gs !== null ? String(Math.round(a.gs / 10)).padStart(2, '0') : ''}`;
       ctx.fillStyle = col;
@@ -410,7 +456,7 @@ export function FavRadar({ onClose, isMobile }: { onClose: () => void; isMobile:
       ) : current && <Scope key={current.id} fav={current} ga={prefs.ga} pollMs={5000} compact={false} />}
 
       <div style={{ fontSize: 10, color: '#3a6a4a', marginTop: 10 }}>
-        Datenblock: Rufzeichen / Höhe in 100 ft, Trend, Geschwindigkeit in 10 kt / Typ · Strich = Position in 1 min ·
+        Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe in 100 ft, Trend, Geschwindigkeit in 10 kt / Typ · Strich = Geschwindigkeitsvektor (Position in 1 min) ·
         <span style={{ color: C.airline }}> Linie</span> · <span style={{ color: C.ga }}>GA</span> · <span style={{ color: C.emerg }}>Notfall-Squawk</span> ·
         Daten: <a href="https://adsb.lol" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>adsb.lol</a> (ODbL)
       </div>
