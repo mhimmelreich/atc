@@ -8,7 +8,7 @@ import { fetchWeather, WEATHER_POLL_MS } from '@/services/WeatherService';
 import { estimateHearing, AUDIBLE_DBA, type HearResult } from '@/game/Hearing';
 import type { Weather } from '@/types/weather';
 import { airlineName } from '@/game/Airlines';
-import { aircraftSilhouette } from '@/game/aircraftSymbol';
+import { drawPlanform, planform } from '@/game/aircraftPlanform';
 import type { LiveAircraft } from '@/types/live';
 import { bearingBetween, destinationPoint, distanceNM } from '@/utils/geo';
 
@@ -24,13 +24,14 @@ export interface Favorite {
   altMax: number;
 }
 
-interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; selected: string | null }
+interface Prefs { layout: 'single' | 'grid'; ga: boolean; hear: boolean; vector: boolean; selected: string | null }
 
 const FAV_KEY = 'atc-favorites-v1';
 const PREF_KEY = 'atc-favradar-v1';
 const MAX_RADIUS = 100;
 const HISTORY = 6;           // Verlaufspunkte je Ziel (wie auf echten Radarschirmen)
 const VECTOR_MIN = 1;        // Geschwindigkeitsvektor: Position in 1 min
+const VECTOR_GAP_PX = 10;    // Vektor beginnt erst so weit vom Symbol
 const EMERGENCY: Record<string, string> = { '7500': 'HIJACK', '7600': 'RADIO', '7700': 'EMERG' };
 const C = {
   bg: '#020a04', ring: '#0f3a1c', ringText: '#2f7a4a', rose: '#2f7a4a',
@@ -41,7 +42,7 @@ function loadFavs(): Favorite[] {
   try { const v = JSON.parse(localStorage.getItem(FAV_KEY) ?? '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
 }
 function loadPrefs(): Prefs {
-  try { return { layout: 'single', ga: true, hear: false, selected: null, ...JSON.parse(localStorage.getItem(PREF_KEY) ?? '{}') }; } catch { return { layout: 'single', ga: true, hear: false, selected: null }; }
+  try { return { layout: 'single', ga: true, hear: false, vector: false, selected: null, ...JSON.parse(localStorage.getItem(PREF_KEY) ?? '{}') }; } catch { return { layout: 'single', ga: true, hear: false, vector: false, selected: null }; }
 }
 function save(key: string, v: unknown) { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* privates Fenster */ } }
 
@@ -93,8 +94,8 @@ function ringStep(r: number): number {
 }
 
 // ── Ein rundes Radarbild ─────────────────────────────────────────────────────
-function Scope({ fav, ga, hear, pollMs, compact, onSelectFav }: {
-  fav: Favorite; ga: boolean; hear: boolean; pollMs: number; compact: boolean; onSelectFav?: () => void;
+function Scope({ fav, ga, hear, vector, pollMs, compact, onSelectFav }: {
+  fav: Favorite; ga: boolean; hear: boolean; vector: boolean; pollMs: number; compact: boolean; onSelectFav?: () => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -287,34 +288,46 @@ function Scope({ fav, ga, hear, pollMs, compact, onSelectFav }: {
       });
       ctx.globalAlpha = 1;
       // Geschwindigkeitsvektor (1 min)
-      if (!a.ground && a.gs && a.track !== null) {
+      // (abschaltbar, beginnt 10 px vor dem Symbol, damit es frei bleibt)
+      if (vector && !a.ground && a.gs && a.track !== null) {
         const e = destinationPoint(p.lat, p.lng, a.track, (a.gs * VECTOR_MIN) / 60);
         const q = toXY(e.lat, e.lng);
-        ctx.strokeStyle = col; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(q.x, q.y); ctx.stroke();
+        const len = Math.hypot(q.x - x, q.y - y);
+        const gap = Math.max(VECTOR_GAP_PX, (planform(a.type, a.category).length * (compact ? 0.4 : 0.5)) / 2 + 4);
+        if (len > gap) {
+          ctx.strokeStyle = col; ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x + ((q.x - x) / len) * gap, y + ((q.y - y) / len) * gap);
+          ctx.lineTo(q.x, q.y);
+          ctx.globalAlpha = 0.5; ctx.stroke(); ctx.globalAlpha = 1;
+        }
       }
       // Symbol; das wahrscheinlich gehörte Ziel pulsiert
       const pulse = loudest?.hex === a.hex ? (1 + Math.sin(now / 250)) / 2 : null;
+      const pf = planform(a.type, a.category);
+      const ringR = Math.max(11, (Math.max(pf.length, pf.span) * (compact ? 0.4 : 0.5)) / 2 + 5);
       if (pulse !== null) {
         ctx.strokeStyle = C.hear; ctx.lineWidth = 1.5;
         ctx.globalAlpha = 0.35 + 0.5 * pulse;
-        ctx.beginPath(); ctx.arc(x, y, 11 + 5 * pulse, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, ringR + 5 * pulse, 0, Math.PI * 2); ctx.stroke();
         ctx.globalAlpha = 1;
       }
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate((((a.track ?? 0) * Math.PI) / 180));
-      aircraftSilhouette(ctx, (isGa(a) ? 5 : 7) * (pulse !== null ? 1 + 0.2 * pulse : 1));
-      ctx.fillStyle = col; ctx.fill();
+      ctx.fillStyle = col;
+      // Größe nach echtem Typ: alle im selben Maßstab (px je Meter), Triebwerke in echter Zahl
+      const half = drawPlanform(ctx, pf, (compact ? 0.4 : 0.5) * (pulse !== null ? 1 + 0.2 * pulse : 1), 8, C.bg);
       ctx.restore();
       // Datenblock: Rufzeichen / Höhe (FL) Trend Geschwindigkeit (kt/10) / Typ
       const trend = a.vs === null || Math.abs(a.vs) < 300 ? ' ' : a.vs > 0 ? '↑' : '↓';
       const l2 = `${a.ground || a.altFt === null ? 'GND' : fl3(a.altFt)}${trend}${a.gs !== null ? String(Math.round(a.gs / 10)).padStart(2, '0') : ''}`;
       ctx.fillStyle = col;
       ctx.font = `${compact ? 10 : 11}px "Courier New", monospace`;
-      ctx.fillText(emerg ? `${a.callsign} ${emerg}` : a.callsign, x + 9, y - 4);
-      ctx.fillText(l2, x + 9, y + 7);
-      if (!compact && a.type) ctx.fillText(a.type, x + 9, y + 18);
+      const lx = x + Math.max(9, half + 3);
+      ctx.fillText(emerg ? `${a.callsign} ${emerg}` : a.callsign, lx, y - 4);
+      ctx.fillText(l2, lx, y + 7);
+      if (!compact && a.type) ctx.fillText(a.type, lx, y + 18);
       hits.current.push({ hex: a.hex, x, y });
     }
     ctx.restore();
@@ -514,6 +527,7 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
           <button key={l} onClick={() => setPref({ layout: l })} style={{ ...BTN, ...(prefs.layout === l ? ACTIVE : {}) }}>{l === 'single' ? 'EINZELN' : 'ALLE'}</button>
         ))}
         <button onClick={() => setPref({ ga: !prefs.ga })} style={{ ...BTN, ...(prefs.ga ? ACTIVE : {}) }} title="Kleinflieger, Hubschrauber, Segler zeigen">GA</button>
+        <button onClick={() => setPref({ vector: !prefs.vector })} style={{ ...BTN, ...(prefs.vector ? ACTIVE : {}) }} title="Geschwindigkeitsvektor: Strich bis zur Position in 1 Minute">VEKTOR</button>
         <button onClick={() => setPref({ hear: !prefs.hear })} style={{ ...BTN, ...(prefs.hear ? { ...ACTIVE, color: C.hear, borderColor: '#aa8844' } : {}) }} title="Schätzen, welchen Flieger man am Favoriten gerade hört (Wind, Höhe, Tempo)">♪ HÖREN</button>
         {current && !grid && <button onClick={() => setEdit((e) => !e)} style={{ ...BTN, ...(edit ? ACTIVE : {}) }}>EINSTELLEN</button>}
         {current && !grid && <button onClick={() => void share(current)} style={BTN} title="Link zu diesem Radar teilen oder kopieren">TEILEN</button>}
@@ -543,13 +557,13 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
       {grid ? (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 260 : 340}px, 1fr))`, gap: 14 }}>
           {favs.map((f) => (
-            <Scope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
+            <Scope key={f.id} fav={f} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} pollMs={10_000} compact onSelectFav={() => setPref({ selected: f.id, layout: 'single' })} />
           ))}
         </div>
-      ) : current && <Scope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} pollMs={5000} compact={false} />}
+      ) : current && <Scope key={current.id} fav={current} ga={prefs.ga} hear={prefs.hear} vector={prefs.vector} pollMs={5000} compact={false} />}
 
       <div style={{ fontSize: 10, color: '#3a6a4a', marginTop: 10 }}>
-        Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe in 100 ft, Trend, Geschwindigkeit in 10 kt / Typ · Strich = Geschwindigkeitsvektor (Position in 1 min) ·
+        Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe in 100 ft, Trend, Geschwindigkeit in 10 kt / Typ · VEKTOR = Strich bis zur Position in 1 min · Symbole in echter Größe und Triebwerkszahl ·
         <span style={{ color: C.airline }}> Linie</span> · <span style={{ color: C.ga }}>GA</span> · <span style={{ color: C.emerg }}>Notfall-Squawk</span> ·
         Daten: <a href="https://adsb.lol" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>adsb.lol</a> (ODbL)
       </div>
