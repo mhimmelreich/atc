@@ -437,8 +437,24 @@ function Scope({ fav, ga, hear, vector, vectorAlpha, trail, trailAlpha, pollMs, 
   if (selected) {
     const a = selected.a;
     if (a.route) {
-      const codes = a.route.split('-');
-      legs = { from: { code: codes[0], guess: false }, to: { code: codes[codes.length - 1], guess: false }, via: codes.slice(1, -1) };
+      let codes = a.route.split('-');
+      // Die Routendatenbank kennt nur das Rufzeichen; manche Airlines fliegen Hin- und Rückflug unter demselben
+      // (z. B. CFG081 EDDF–VTBS, landet aber gerade in EDDF). Passt die Flugphase zur Gegenrichtung: umdrehen.
+      const rel = (code: string) => {
+        const f = fields.find((x) => x.ident === code);
+        if (!f) return null;
+        const d = distanceNM(selected.p.lat, selected.p.lng, f.lat, f.lng);
+        const off = a.track === null ? 90 : Math.abs(((bearingBetween(selected.p.lat, selected.p.lng, f.lat, f.lng) - a.track + 540) % 360) - 180);
+        return { d, off };
+      };
+      const low = !a.ground && a.altFt !== null && a.altFt < 10000;
+      const first = rel(codes[0]), last = rel(codes[codes.length - 1]);
+      const reversed = codes.length > 1 && (
+        (originGuess !== null && originGuess === codes[codes.length - 1] && originGuess !== codes[0])
+        || (low && (a.vs ?? 0) < -300 && first !== null && first.d < 40 && first.off < 60)
+        || (low && (a.vs ?? 0) > 300 && last !== null && last.d < 40 && last.off > 120));
+      if (reversed) codes = [...codes].reverse();
+      legs = { from: { code: codes[0], guess: reversed }, to: { code: codes[codes.length - 1], guess: reversed }, via: codes.slice(1, -1) };
     } else {
       if (originGuess) legs.from = { code: originGuess, guess: true };
       if (!a.ground && a.altFt !== null && a.altFt < 12000 && (a.vs ?? 0) < -300 && a.track !== null) {
@@ -549,7 +565,7 @@ function Details({ v, fav, legs, names, onClose, onInfo }: { v: { a: LiveAircraf
   );
   const rows: Array<[string, React.ReactNode]> = [];
   const leg = (l?: { code: string; guess: boolean }) => l
-    ? <span title={l.guess ? 'geschätzt (Route unbekannt)' : undefined}>{l.guess && '≈ '}{link('airport', l.code)}{names[l.code] && <span style={{ color: '#9fc8e0' }}> {shortName(names[l.code])}</span>}</span>
+    ? <span title={l.guess ? 'geschätzt aus Flugbahn und Flugphase' : undefined}>{l.guess && '≈ '}{link('airport', l.code)}{names[l.code] && <span style={{ color: '#9fc8e0' }}> {shortName(names[l.code])}</span>}</span>
     : <span style={{ color: '#4f8a60' }}>unbekannt</span>;
   rows.push(['VON', leg(legs.from)]);
   if (legs.via?.length) rows.push(['ÜBER', <>{legs.via.map((c, i) => <span key={c}>{i > 0 && ', '}{link('airport', c)}</span>)}</>]);
