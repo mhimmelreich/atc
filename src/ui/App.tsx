@@ -62,7 +62,7 @@ const RUNWAY_SOURCES: Record<RunwaySource, { label: string; title: string }> = {
 };
 const TRAFFIC_OPTIONS: Array<{ id: TrafficMode; label: string; title: string }> = [
   { id: 'sim',  label: 'SIM',  title: 'Erfundener Verkehr zum Lotsen' },
-  { id: 'live', label: 'LIVE', title: 'Echte Flieger von adsb.lol, Anflüge zum Lotsen übernehmen' },
+  { id: 'live', label: 'LIVE', title: 'Echte Flieger von adsb.fi/adsb.lol, Anflüge zum Lotsen übernehmen' },
   { id: 'watch', label: 'WATCH', title: 'Zuschauen: nur echter Verkehr in Echtzeit, ohne Lotsen und Punkte' },
 ];
 

@@ -1,5 +1,6 @@
 // filepath: server/routes/traffic.ts
-// Echter Verkehr über adsb.lol (Daten unter ODbL, Quellenhinweis im Spiel).
+// Echter Verkehr über adsb.fi (Open Data, nur private Nutzung, Quellenhinweis im Spiel), Ersatz adsb.lol (ODbL).
+// adsb.lol erlaubt seit Oktober 2026 nur noch 500 Abfragen am Tag je IP, zu wenig für Spiel und Tagesaufzeichnung.
 // Alle Spieler am selben Platz teilen sich eine Abfrage: Antwort 5 s zwischengespeichert.
 // Die Flugroute (Start- und Zielplatz) kommt von der Routen-Abfrage der adsb.lol-API (adsb.im,
 // Daten aus VRS standing-data, CC0).
@@ -9,7 +10,13 @@ import { fillGap, type GapPoint } from '../nat.js';
 
 const router = Router();
 
-const UPSTREAM = 'https://api.adsb.lol/v2/point';
+// Quellen in Reihenfolge; dieselben readsb-Felder ("ac"). adsb.fi: höchstens 1 Abfrage pro Sekunde
+const UPSTREAMS: Array<{ name: string; url: (lat: number, lon: number, nm: number) => string; gapMs: number; nextAt: number; blockedUntil: number }> = [
+  { name: 'adsb.fi', url: (lat, lon, nm) => `https://opendata.adsb.fi/api/v3/lat/${lat}/lon/${lon}/dist/${nm}`, gapMs: 1100, nextAt: 0, blockedUntil: 0 },
+  { name: 'adsb.lol', url: (lat, lon, nm) => `https://api.adsb.lol/v2/point/${lat}/${lon}/${nm}`, gapMs: 0, nextAt: 0, blockedUntil: 0 },
+];
+const BLOCK_429_MS = 5 * 60_000; // nach 429 ohne Angabe der Wartezeit die Quelle so lange auslassen
+const BLOCK_ERR_MS = 15_000;
 const USER_AGENT = 'atc-game (games.himmelreich.cloud)';
 const RADIUS_NM = 120;
 const TTL_MS = 5000;
@@ -70,6 +77,8 @@ export interface LiveAircraftDto {
 
 export interface Snapshot {
   fetchedAt: number;
+  /** Datenquelle (adsb.fi oder adsb.lol) */
+  source: string;
   aircraft: Array<Omit<LiveAircraftDto, 'age'> & { seenPos: number }>;
   /** Übriger Verkehr (Kleinflieger, Hubschrauber …), nur fürs Favoriten-Radar */
   others: Snapshot['aircraft'];
@@ -171,13 +180,42 @@ function mapAircraft(a: RawAircraft): (Snapshot['aircraft'][number] & { relevant
   };
 }
 
+/** Erste Quelle, die gerade nicht gesperrt ist; nach 429 so lange auslassen, wie sie verlangt */
+async function fetchUpstream(lat: number, lon: number): Promise<{ source: string; data: { ac?: RawAircraft[] } }> {
+  let lastErr = new Error('keine Quelle frei');
+  for (const u of UPSTREAMS) {
+    const now = Date.now();
+    if (now < u.blockedUntil) continue;
+    // Abstand zwischen zwei Abfragen derselben Quelle einhalten (mehrere Plätze gleichzeitig)
+    const wait = Math.max(0, u.nextAt - now);
+    u.nextAt = now + wait + u.gapMs;
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    try {
+      const res = await fetch(u.url(lat, lon, RADIUS_NM), {
+        headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.status === 429) {
+        const reset = Number(res.headers.get('x-ratelimit-reset') ?? res.headers.get('retry-after'));
+        const ms = Number.isFinite(reset) && reset > 0 ? Math.min(reset * 1000, 86_400_000) : BLOCK_429_MS;
+        u.blockedUntil = Date.now() + ms;
+        console.error(`traffic: ${u.name} HTTP 429, ausgesetzt für ${Math.round(ms / 60_000)} min`);
+        lastErr = new Error(`${u.name} HTTP 429`);
+        continue;
+      }
+      if (!res.ok) throw new Error(`${u.name} HTTP ${res.status}`);
+      return { source: u.name, data: await res.json() as { ac?: RawAircraft[] } };
+    } catch (err) {
+      if (u.blockedUntil < Date.now()) u.blockedUntil = Date.now() + BLOCK_ERR_MS;
+      lastErr = err as Error;
+      console.error('traffic:', u.name, lastErr.message);
+    }
+  }
+  throw lastErr;
+}
+
 async function fetchSnapshot(lat: number, lon: number): Promise<Snapshot> {
-  const res = await fetch(`${UPSTREAM}/${lat}/${lon}/${RADIUS_NM}`, {
-    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) throw new Error(`adsb.lol HTTP ${res.status}`);
-  const data = await res.json() as { ac?: RawAircraft[] };
+  const { source, data } = await fetchUpstream(lat, lon);
   const aircraft: Snapshot['aircraft'] = [];
   const others: Snapshot['aircraft'] = [];
   for (const raw of data.ac ?? []) {
@@ -186,7 +224,7 @@ async function fetchSnapshot(lat: number, lon: number): Promise<Snapshot> {
     const { relevant, ...a } = m;
     (relevant ? aircraft : others).push(a);
   }
-  return { fetchedAt: Date.now(), aircraft, others };
+  return { fetchedAt: Date.now(), source, aircraft, others };
 }
 
 /**
@@ -224,7 +262,7 @@ export async function snapshotAt(lat: number, lon: number, needNm?: number): Pro
     // Gleichzeitige Anfragen warten auf dieselbe Abfrage
     entry.pending ??= fetchSnapshot(qLat, qLon)
       .then((snapshot) => { entry.snapshot = snapshot; entry.failedAt = undefined; return snapshot; })
-      .catch((err: Error) => { entry.failedAt = Date.now(); console.error('traffic:', err.message); return undefined; })
+      .catch(() => { entry.failedAt = Date.now(); return undefined; })
       .finally(() => { entry.pending = undefined; });
     await entry.pending;
   }
@@ -262,8 +300,8 @@ router.get('/', async (req, res) => {
   const sinceFetch = (Date.now() - snapshot.fetchedAt) / 1000;
   res.setHeader('Cache-Control', 'no-store');
   res.json({
-    source: 'adsb.lol',
-    license: 'ODbL 1.0',
+    source: snapshot.source,
+    ...(snapshot.source === 'adsb.lol' ? { license: 'ODbL 1.0' } : {}),
     aircraft: (all ? [...snapshot.aircraft, ...snapshot.others] : snapshot.aircraft).map(({ seenPos, ...a }) => {
       const route = routes.get(a.callsign)?.codes;
       return { ...a, ...(route ? { route } : {}), age: Math.round((seenPos + sinceFetch) * 10) / 10 };

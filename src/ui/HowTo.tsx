@@ -87,7 +87,7 @@ function Overview() {
       <P>Punkte gibt es nur für Landungen übernommener Flieger. Zu den echten Fliegern hältst du denselben Abstand wie zu deinen eigenen; nach der ILS-Freigabe zählt das innerhalb von 15 NM um den Platz nicht mehr, dort ist der echte Tower zuständig. LIVE läuft in Echtzeit, ohne Zeitraffer.</P>
       <P>Die Landerichtung folgt bei LIVE den echten Landungen: Sind in 10 Minuten mindestens zwei echte Flieger in der anderen Richtung gelandet und keiner in deiner, stellt das Spiel um.</P>
       <H>ZUSCHAUEN (WATCH)</H>
-      <P>Mit <B>TRAFFIC WATCH</B> schaust du nur zu: Das Radar (und die 3D-Ansicht) zeigt den echten Verkehr rund um den Platz in Echtzeit, ohne erfundene Flieger, ohne Anrufe, ohne Lotsen und ohne Punkte. Die Positionen kommen etwa alle 5 Sekunden von adsb.lol und werden dazwischen mit Kurs, Geschwindigkeit und Sinkrate weitergerechnet.</P>
+      <P>Mit <B>TRAFFIC WATCH</B> schaust du nur zu: Das Radar (und die 3D-Ansicht) zeigt den echten Verkehr rund um den Platz in Echtzeit, ohne erfundene Flieger, ohne Anrufe, ohne Lotsen und ohne Punkte. Die Positionen kommen etwa alle 5 Sekunden von adsb.fi (ersatzweise adsb.lol) und werden dazwischen mit Kurs, Geschwindigkeit und Sinkrate weitergerechnet.</P>
       <P><span style={{ color: '#78d7ff' }}>Hellblau</span> sind Anflüge auf den Platz (mit Startplatz), <span style={{ color: '#ffbe5a' }}>orange</span> Abflüge (mit Ziel), grau der übrige Verkehr. Ein Klick auf einen Flieger, auf ihn in der Liste oder auf seine Zeile im Log zeigt seine Daten: Typ, Kennzeichen, Route, Höhe und im Autopiloten gewählte Höhe, Sinkrate, Geschwindigkeit, Kurs, Squawk. Das Log meldet jeden Endanflug mit Bahn und jeden Start.</P>
       <P>Die Knöpfe <B>ALLE / IN / OUT</B> über der Liste filtern Liste und Radar: nur Anflüge, nur Abflüge oder alle Flieger.</P>
       <P><B>SPECTATOR</B> legt deinen Standort fest: <B>ICAO</B> heißt am gewählten Platz (oben eintippen), <B>GPS</B> nimmt den Standort deines Geräts, zeigt ihn als „YOU“, holt den Verkehr rund um dich und wählt den nächsten Verkehrsflughafen. Entfernungen in Liste und Details gelten dann ab dir.</P>
@@ -287,7 +287,7 @@ function Credits() {
       <P>Anflugverfahren (STARs), ILS und Funkfrequenzen: Navigraph AIRAC, nur zur privaten Nutzung freigeschaltet. Sonst Funkfrequenzen von {link('https://ourairports.com/data/', 'OurAirports')} (gemeinfrei).</P>
       <P>Wetter (METAR): {link('https://aviationweather.gov/data/api/', 'aviationweather.gov')} (NOAA/NWS, gemeinfrei).</P>
       <P>Funknamen der Airlines: {link('https://openflights.org/data.php', 'OpenFlights')}, Open Database License (ODbL).</P>
-      <P>Echter Verkehr (LIVE): {link('https://adsb.lol', 'adsb.lol')}, Open Database License (ODbL).</P>
+      <P>Echter Verkehr (LIVE, WATCH): {link('https://adsb.fi', 'adsb.fi')} (Open Data, private Nutzung), ersatzweise {link('https://adsb.lol', 'adsb.lol')}, Open Database License (ODbL). Flugbahnen: adsb.lol.</P>
       <P>Start und Ziel der echten Flüge: Routen-Abfrage von adsb.lol (adsb.im), Routendaten aus {link('https://github.com/vradarserver/standing-data', 'VRS standing-data')} (CC0).</P>
       <H>STIMMEN</H>
       <P>Sprachausgabe mit {link('https://github.com/OHF-Voice/piper1-gpl', 'Piper')} (GPL-3.0), als eigener Dienst auf dem Server.</P>

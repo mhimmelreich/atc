@@ -918,7 +918,7 @@ export function FavRadar({ onClose, isMobile, shared: sharedIn }: { onClose: () 
       <div style={{ fontSize: 10, color: '#3a6a4a', marginTop: 10 }}>
         Bahnen: OurAirports · Datenblock: Rufzeichen / Höhe in 100 ft, Trend, Geschwindigkeit in 10 kt / Typ · VEKTOR = Strich bis zur Position in 1 min · Symbole in echter Größe und Triebwerkszahl ·
         <span style={{ color: C.airline }}> Linie</span> · <span style={{ color: C.ga }}>GA</span> · <span style={{ color: C.emerg }}>Notfall-Squawk</span> ·
-        Daten: <a href="https://adsb.lol" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>adsb.lol</a> (ODbL){prefs.rain && <> · {RAIN_CREDIT} (<a href="https://www.dwd.de" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>dwd.de</a>)</>}
+        Daten: <a href="https://adsb.fi" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>adsb.fi</a> · <a href="https://adsb.lol" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>adsb.lol</a> (ODbL){prefs.rain && <> · {RAIN_CREDIT} (<a href="https://www.dwd.de" target="_blank" rel="noreferrer" style={{ color: '#4f8a60' }}>dwd.de</a>)</>}
       </div>
     </div>
   );
