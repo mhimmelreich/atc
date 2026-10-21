@@ -40,6 +40,41 @@ services:
       PORT: 3001
       HOST: 0.0.0.0
       TZ: Europe/Berlin
+      NAVDATA_DB: /app/data/navdata/little_navmap_navigraph.sqlite
+      # Privater Schlüssel für /api/navdata (in .env setzen, nicht committen)
+      NAVDATA_KEY: ${NAVDATA_KEY:-}
+      TTS_URL: http://atc-tts:5002
+    volumes:
+      # Navigraph-AIRAC-DB (lizenziert, nicht im Repo) – siehe scripts/extract-navdata.sh
+      - ./data/navdata:/app/data/navdata:ro
+      # OurAirports-CSVs (frei, vom Server geladen und gecacht)
+      - ./data/opendata:/app/data/opendata
+      # Ortschaften aus OpenStreetMap (Overpass, gecacht)
+      - ./data/towns:/app/data/towns
+      # Markante Bauwerke aus OpenStreetMap (Overpass, gecacht)
+      - ./data/landmarks:/app/data/landmarks
+      # Nordatlantik-Tracks (FAA, frei), gesammelt für die Lücke über dem Ozean
+      - ./data/nat:/app/data/nat
+      # Tagesaufzeichnung der Starts und Landungen (WATCH TAG), 30 Tage
+      - ./data/daytracks:/app/data/daytracks
+      # Flughafengelände aus OpenStreetMap (Terminals, Vorfeld, Tower …, Overpass, gecacht)
+      - ./data/airport:/app/data/airport
+      # Autobahnen aus OpenStreetMap (Overpass, gecacht)
+      - ./data/roads:/app/data/roads
+    networks:
+      - proxy
+    depends_on:
+      - atc-tts
+
+  # Sprachausgabe für den Funkverkehr (Piper), nur intern über atc-api erreichbar
+  atc-tts:
+    build:
+      context: .
+      dockerfile: Dockerfile.tts
+    container_name: atc-tts
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Berlin
     networks:
       - proxy
 

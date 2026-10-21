@@ -7,6 +7,8 @@ interface Props {
   violations: number;
   paused: boolean;
   timeScale: number;
+  /** LIVE: nur Echtzeit */
+  timeLocked?: boolean;
   sweepEnabled: boolean;
   onPause: () => void;
   onResume: () => void;
@@ -14,7 +16,7 @@ interface Props {
   onTimeScale: (s: number) => void;
 }
 
-export function ScorePanel({ score, landings, violations, paused, timeScale, sweepEnabled, onPause, onResume, onToggleSweep, onTimeScale }: Props) {
+export function ScorePanel({ score, landings, violations, paused, timeScale, timeLocked, sweepEnabled, onPause, onResume, onToggleSweep, onTimeScale }: Props) {
   return (
     <div style={{ borderTop: '1px solid #1a3a1a', paddingTop: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 4 }}>
@@ -55,6 +57,8 @@ export function ScorePanel({ score, landings, violations, paused, timeScale, swe
           <button
             key={s}
             onClick={() => onTimeScale(s)}
+            disabled={timeLocked && s !== 1}
+            title={timeLocked && s !== 1 ? 'LIVE läuft in Echtzeit' : undefined}
             style={{
               flex: 1,
               background: timeScale === s ? '#0a3020' : 'transparent',
@@ -63,7 +67,8 @@ export function ScorePanel({ score, landings, violations, paused, timeScale, swe
               fontFamily: '"Courier New", monospace',
               fontSize: 10,
               padding: '3px 0',
-              cursor: 'pointer',
+              cursor: timeLocked && s !== 1 ? 'not-allowed' : 'pointer',
+              opacity: timeLocked && s !== 1 ? 0.35 : 1,
               borderRadius: 2,
             }}
           >

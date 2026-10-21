@@ -1,41 +1,11 @@
 // filepath: src/services/AirportDataService.ts
-import type { Airport, OsmWay, Runway } from '@/types/airport';
+import type { Airport, AirportLayer, OsmWay } from '@/types/airport';
+import { buildingHeightM } from '@/types/airport';
 import type { Waypoint, STAR } from '@/types/navdata';
-import { getStaticAirportData, getStaticWaypoints, getStaticStars } from '@/data/airports/index';
-import { bearingBetween } from '@/utils/geo';
+import { fetchNavData, fetchOpenData } from './NavigraphService';
 
-// Legacy fallback airports for non-registered ICAOs
-const LEGACY_FALLBACKS: Record<string, Airport> = {
-  EGLL: {
-    icao: 'EGLL', name: 'London Heathrow', lat: 51.4775, lng: -0.4614,
-    elevationFt: 83, magneticVariation: -0.3, transitionAltitudeFt: 6000,
-    runways: [
-      { id: '27L', recipId: '09R', heading: 270, recipHeading: 90, thresholdLat: 51.4806, thresholdLng: -0.4337, endLat: 51.4806, endLng: -0.5650, lengthM: 3901, widthM: 50, elevationFt: 79, ils: { runway: '27L', localizerCourse: 270, glideslopeAngle: 3.0, frequencyMHz: 110.30, category: 'III' } },
-      { id: '27R', recipId: '09L', heading: 270, recipHeading: 90, thresholdLat: 51.4731, thresholdLng: -0.4337, endLat: 51.4731, endLng: -0.5650, lengthM: 3658, widthM: 50, elevationFt: 77, ils: { runway: '27R', localizerCourse: 270, glideslopeAngle: 3.0, frequencyMHz: 111.75, category: 'III' } },
-      { id: '09L', recipId: '27R', heading: 90, recipHeading: 270, thresholdLat: 51.4731, thresholdLng: -0.5650, endLat: 51.4731, endLng: -0.4337, lengthM: 3658, widthM: 50, elevationFt: 77, ils: { runway: '09L', localizerCourse: 90, glideslopeAngle: 3.0, frequencyMHz: 109.50, category: 'I' } },
-      { id: '09R', recipId: '27L', heading: 90, recipHeading: 270, thresholdLat: 51.4806, thresholdLng: -0.5650, endLat: 51.4806, endLng: -0.4337, lengthM: 3901, widthM: 50, elevationFt: 79, ils: { runway: '09R', localizerCourse: 90, glideslopeAngle: 3.0, frequencyMHz: 110.90, category: 'I' } },
-    ],
-  },
-  KJFK: {
-    icao: 'KJFK', name: 'New York JFK', lat: 40.6413, lng: -73.7781,
-    elevationFt: 13, magneticVariation: -13.5, transitionAltitudeFt: 18000,
-    runways: [
-      { id: '31L', recipId: '13R', heading: 310, recipHeading: 130, thresholdLat: 40.6195, thresholdLng: -73.7456, endLat: 40.6550, endLng: -73.8100, lengthM: 3460, widthM: 46, elevationFt: 13, ils: { runway: '31L', localizerCourse: 310, glideslopeAngle: 3.0, frequencyMHz: 109.90, category: 'I' } },
-      { id: '22R', recipId: '04L', heading: 220, recipHeading: 40,  thresholdLat: 40.6609, thresholdLng: -73.7612, endLat: 40.6308, endLng: -73.8084, lengthM: 3750, widthM: 46, elevationFt: 13, ils: { runway: '22R', localizerCourse: 220, glideslopeAngle: 3.0, frequencyMHz: 111.90, category: 'I' } },
-      { id: '13R', recipId: '31L', heading: 130, recipHeading: 310, thresholdLat: 40.6550, thresholdLng: -73.8100, endLat: 40.6195, endLng: -73.7456, lengthM: 3460, widthM: 46, elevationFt: 13 },
-    ],
-  },
-  EDDL: {
-    icao: 'EDDL', name: 'Düsseldorf', lat: 51.2895, lng: 6.7668,
-    elevationFt: 147, magneticVariation: 2.5, transitionAltitudeFt: 5000,
-    runways: [
-      { id: '23L', recipId: '05R', heading: 230, recipHeading: 50, thresholdLat: 51.3064, thresholdLng: 6.7540, endLat: 51.2695, endLng: 6.7960, lengthM: 3000, widthM: 45, elevationFt: 145, ils: { runway: '23L', localizerCourse: 230, glideslopeAngle: 3.0, frequencyMHz: 110.10, category: 'III' } },
-      { id: '05R', recipId: '23L', heading: 50,  recipHeading: 230, thresholdLat: 51.2695, thresholdLng: 6.7960, endLat: 51.3064, endLng: 6.7540, lengthM: 3000, widthM: 45, elevationFt: 149, ils: { runway: '05R', localizerCourse: 50,  glideslopeAngle: 3.0, frequencyMHz: 111.55, category: 'I' } },
-    ],
-  },
-};
-
-export const AVAILABLE_AIRPORTS = ['EDDF', 'EGLL', 'KJFK', 'EDDL'];
+// Vorschläge in der Auswahl; mit Navigraph-Daten ist jeder ICAO-Code möglich
+export const AVAILABLE_AIRPORTS = ['EDDF', 'EDDM', 'EDDL', 'EDDH', 'EDDB', 'LSZH', 'LOWW', 'EGLL', 'LFPG', 'EHAM', 'KJFK'];
 
 // ── Overpass Response Types ───────────────────────────────────────────────────
 interface OverpassElement {
@@ -52,32 +22,57 @@ interface OverpassResponse {
 }
 
 // ── Main fetch function ───────────────────────────────────────────────────────
-export async function fetchAirportData(icao: string): Promise<{ airport: Airport; waypoints: Waypoint[]; stars: STAR[] }> {
-  const upper = icao.toUpperCase();
+export type AirportSource = 'navdata' | 'open' | 'generic';
+export type SourcePreference = 'auto' | Exclude<AirportSource, 'generic'>;
 
-  // Get static base (registry or legacy fallback)
-  const staticData = getStaticAirportData(upper);
-  const baseAirport: Airport = staticData?.airport ?? LEGACY_FALLBACKS[upper] ?? buildGenericAirport(upper);
-  const waypoints: Waypoint[] = staticData ? getStaticWaypoints(upper) : [];
-  const stars: STAR[] = getStaticStars(upper);
+interface ResolvedData { airport: Airport; waypoints: Waypoint[]; stars: STAR[] }
 
-  // Fetch Overpass geometry
-  try {
-    const res = await fetch(`${import.meta.env.BASE_URL}api/airport/${upper}`);
-    if (res.ok) {
-      const osmData: OverpassResponse = await res.json();
-      const merged = mergeOsmData(baseAirport, osmData);
-      return { airport: merged, waypoints, stars };
+/** Lädt eine einzelne Quelle; null, wenn sie für diesen Platz nichts hat */
+async function loadSource(source: Exclude<AirportSource, 'generic'>, icao: string): Promise<ResolvedData | null> {
+  switch (source) {
+    case 'navdata': {
+      const d = await fetchNavData(icao);
+      return d ? { airport: d.airport, waypoints: d.waypoints, stars: d.stars } : null;
     }
-  } catch (err) {
-    console.warn(`Overpass fetch failed for ${upper}:`, err);
+    case 'open': {
+      const d = await fetchOpenData(icao);
+      return d ? { airport: d.airport, waypoints: d.waypoints, stars: [] } : null;
+    }
   }
-
-  return { airport: baseAirport, waypoints, stars };
 }
 
-// ── OSM Merge ─────────────────────────────────────────────────────────────────
-function mergeOsmData(base: Airport, osm: OverpassResponse): Airport {
+// Auto: Navigraph (privat) → OurAirports (frei)
+const AUTO_ORDER: Array<Exclude<AirportSource, 'generic'>> = ['navdata', 'open'];
+
+export async function fetchAirportData(icao: string, preference: SourcePreference = 'auto'): Promise<ResolvedData & { source: AirportSource }> {
+  const upper = icao.toUpperCase();
+
+  // Gewählte Quelle zuerst; hat sie den Platz nicht, greift die Auto-Reihenfolge
+  const order = preference === 'auto' ? AUTO_ORDER : [preference, ...AUTO_ORDER.filter((s) => s !== preference)];
+  let resolved: ResolvedData | null = null;
+  let source: AirportSource = 'generic';
+  for (const s of order) {
+    resolved = await loadSource(s, upper);
+    if (resolved) { source = s; break; }
+  }
+  const { airport: baseAirport, waypoints, stars } = resolved ?? { airport: buildGenericAirport(upper), waypoints: [], stars: [] };
+  // Das OSM-Gelände kommt getrennt (fetchAirportLayer), damit der Platz ohne Wartezeit auf Overpass lädt
+  return { airport: baseAirport, waypoints, stars, source };
+}
+
+// ── OSM-Gelände ───────────────────────────────────────────────────────────────
+/** Gelände des Platzes aus OSM; beim ersten Mal sammelt der Server noch (202), dann später erneut fragen */
+export async function fetchAirportLayer(icao: string, isStopped: () => boolean = () => false): Promise<AirportLayer | null> {
+  for (let attempt = 0; attempt < 30 && !isStopped(); attempt++) {
+    const res = await fetch(`${import.meta.env.BASE_URL}api/airport/${icao.toUpperCase()}`);
+    if (res.status === 202 || res.status === 503 || res.status === 504) { await new Promise((ok) => setTimeout(ok, 10_000)); continue; }
+    if (!res.ok) return null;
+    return parseLayer((await res.json()) as OverpassResponse);
+  }
+  return null;
+}
+
+export function parseLayer(osm: OverpassResponse): AirportLayer {
   const ways = osm.elements.filter((e): e is OverpassElement & { geometry: Array<{ lat: number; lon: number }> } =>
     e.type === 'way' && Array.isArray(e.geometry) && e.geometry.length >= 2
   );
@@ -86,70 +81,45 @@ function mergeOsmData(base: Airport, osm: OverpassResponse): Airport {
   const taxiways: OsmWay[] = [];
   const aprons: OsmWay[] = [];
   const terminals: OsmWay[] = [];
-  const osmRunways: OsmWay[] = [];
+  const hangars: OsmWay[] = [];
+  const boundary: OsmWay[] = [];
+  const towers: NonNullable<AirportLayer['towers']> = [];
 
+  // Auf dem Platz sind Aussichts- bzw. Kontrolltürme praktisch immer Tower oder Vorfeldkontrolle
+  const isTower = (t: Record<string, string>) => t.aeroway === 'control_tower' || t.aeroway === 'tower' || t.building === 'control_tower'
+    || t.service === 'aircraft_control' || (t.man_made === 'tower' && /observation|traffic_control|aircraft_control/.test(t['tower:type'] ?? ''));
+  const towerLabel = (t: Record<string, string>) => (/vorfeld|apron|rampco/i.test(t.name ?? '') ? 'APRON' : 'TWR');
   for (const w of ways) {
-    const tag = w.tags?.aeroway ?? '';
-    const way: OsmWay = {
-      id: w.id,
-      geometry: w.geometry.map((p) => ({ lat: p.lat, lng: p.lon })),
-      tags: w.tags ?? {},
-    };
-    if (tag === 'runway')    osmRunways.push(way);
-    else if (tag === 'taxiway' || tag === 'taxilane') taxiways.push(way);
-    else if (tag === 'apron')    aprons.push(way);
-    else if (tag === 'terminal') terminals.push(way);
+    const t = w.tags ?? {};
+    const way: OsmWay = { id: w.id, geometry: w.geometry.map((p) => ({ lat: p.lat, lng: p.lon })), tags: t };
+    if (t.aeroway === 'aerodrome') boundary.push(way);
+    else if (isTower(t)) {
+      const c = centroid(way);
+      towers.push({ ...c, heightM: buildingHeightM(t, 60), footprint: way, label: towerLabel(t) });
+    }
+    else if (t.aeroway === 'taxiway' || t.aeroway === 'taxilane') taxiways.push(way);
+    else if (t.aeroway === 'apron') aprons.push(way);
+    else if (t.aeroway === 'terminal' || t.building === 'terminal') terminals.push(way);
+    else if (t.aeroway === 'hangar' || t.building === 'hangar') hangars.push(way);
   }
-
+  for (const n of nodes) {
+    if (isTower(n.tags ?? {}) && !towers.some((t) => Math.abs(t.lat - n.lat!) < 0.001 && Math.abs(t.lng - n.lon!) < 0.0015)) {
+      towers.push({ lat: n.lat!, lng: n.lon!, heightM: buildingHeightM(n.tags ?? {}, towerLabel(n.tags ?? {}) === 'APRON' ? 35 : 50), label: towerLabel(n.tags ?? {}) });
+    }
+  }
   const holdingPoints = nodes
     .filter((n) => n.tags?.aeroway === 'holding_position')
     .map((n) => ({ lat: n.lat!, lng: n.lon!, name: n.tags?.ref }));
+  const gates = nodes
+    .filter((n) => (n.tags?.aeroway === 'gate' || n.tags?.aeroway === 'parking_position') && n.tags?.ref)
+    .map((n) => ({ lat: n.lat!, lng: n.lon!, ref: n.tags!.ref }));
 
-  // Update runway thresholds from OSM if available
-  const runways = reconcileRunways(base.runways, osmRunways);
-
-  return {
-    ...base,
-    runways,
-    layer: { taxiways, aprons, terminals, holdingPoints },
-  };
+  return { taxiways, aprons, terminals, holdingPoints, boundary, hangars, towers, gates };
 }
 
-/** Try to match OSM runway ways to our named runways and update coordinates */
-function reconcileRunways(baseRunways: Runway[], osmRunways: OsmWay[]): Runway[] {
-  if (osmRunways.length === 0) return baseRunways;
-
-  return baseRunways.map((rwy) => {
-    // Match by ref tag containing runway ID
-    const match = osmRunways.find((ow) => {
-      const ref = (ow.tags.ref ?? '').toUpperCase();
-      return ref.includes(rwy.id) || ref.includes(rwy.recipId);
-    });
-    if (!match || match.geometry.length < 2) return rwy;
-
-    const pts = match.geometry;
-    const p1 = pts[0];
-    const p2 = pts[pts.length - 1];
-    const hdg = bearingBetween(p1.lat, p1.lng, p2.lat, p2.lng);
-
-    // Determine which end is the threshold for this runway direction
-    const isForward = Math.abs(angularDiff(hdg, rwy.heading)) < 90;
-    const thrPt  = isForward ? p1 : p2;
-    const endPt  = isForward ? p2 : p1;
-
-    return {
-      ...rwy,
-      thresholdLat: thrPt.lat,
-      thresholdLng: thrPt.lng,
-      endLat: endPt.lat,
-      endLng: endPt.lng,
-    };
-  });
-}
-
-function angularDiff(a: number, b: number): number {
-  const d = ((a - b) % 360 + 360) % 360;
-  return d > 180 ? d - 360 : d;
+function centroid(w: OsmWay): { lat: number; lng: number } {
+  const g = w.geometry;
+  return { lat: g.reduce((s, p) => s + p.lat, 0) / g.length, lng: g.reduce((s, p) => s + p.lng, 0) / g.length };
 }
 
 function buildGenericAirport(icao: string): Airport {
@@ -164,4 +134,22 @@ function buildGenericAirport(icao: string): Airport {
       ils: { runway: '27', localizerCourse: 270, glideslopeAngle: 3.0, frequencyMHz: 109.9, category: 'I' },
     }],
   };
+}
+
+/** Flugplatz mit Bahnen im Umkreis (Favoriten-Radar, OurAirports); kind L/M/S = groß/mittel/klein */
+export interface AreaAirport {
+  ident: string;
+  name: string;
+  lat: number;
+  lng: number;
+  kind: 'L' | 'M' | 'S';
+  runways: Array<[number, number, number, number, string]>;
+  elevFt: number;
+}
+
+export async function fetchAreaAirports(lat: number, lng: number, nm: number): Promise<AreaAirport[]> {
+  const res = await fetch(`${import.meta.env.BASE_URL}api/opendata/area?lat=${lat.toFixed(3)}&lon=${lng.toFixed(3)}&nm=${Math.ceil(nm)}`);
+  if (!res.ok) throw new Error(`Flugplätze: HTTP ${res.status}`);
+  const data = await res.json() as { airports: Array<[string, string, number, number, AreaAirport['kind'], AreaAirport['runways'], number?]> };
+  return data.airports.map(([ident, name, alat, alng, kind, runways, elevFt]) => ({ ident, name, lat: alat, lng: alng, kind, runways, elevFt: elevFt ?? 0 }));
 }

@@ -13,9 +13,11 @@ interface Alert {
 interface Props {
   conflicts: ConflictPair[];
   aircraft: Aircraft[];
+  /** Rufzeichen echter Flieger (LIVE) nach Kennung */
+  names?: Record<string, string>;
 }
 
-export function AlertBanner({ conflicts, aircraft }: Props) {
+export function AlertBanner({ conflicts, aircraft, names }: Props) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
 
   useEffect(() => {
@@ -23,8 +25,8 @@ export function AlertBanner({ conflicts, aircraft }: Props) {
     const newAlerts: Alert[] = conflicts.map((c) => {
       const a = aircraft.find((ac) => ac.id === c.a);
       const b = aircraft.find((ac) => ac.id === c.b);
-      const csA = a?.callsign ?? c.a;
-      const csB = b?.callsign ?? c.b;
+      const csA = a?.callsign ?? names?.[c.a] ?? c.a;
+      const csB = b?.callsign ?? names?.[c.b] ?? c.b;
       const sep = `${c.lateralNM.toFixed(1)}NM / ${Math.round(c.verticalFt)}ft`;
       return {
         id: `${c.a}:${c.b}`,
@@ -37,7 +39,7 @@ export function AlertBanner({ conflicts, aircraft }: Props) {
     });
 
     setAlerts(newAlerts);
-  }, [conflicts, aircraft]);
+  }, [conflicts, aircraft, names]);
 
   if (alerts.length === 0) return null;
 

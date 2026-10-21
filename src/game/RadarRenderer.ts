@@ -1,6 +1,11 @@
 // filepath: src/game/RadarRenderer.ts
-import type { Aircraft, ConflictPair } from '@/types/aircraft';
-import { AIRCRAFT_TYPES } from './constants';
+import { rainImage, RAIN_CREDIT } from './RainRadar';
+import type { Aircraft, ConflictPair, TrailPoint } from '@/types/aircraft';
+import type { LiveAircraft, LiveInbound } from '@/types/live';
+import { typeData } from './constants';
+import { aircraftSilhouette } from './aircraftSymbol';
+import { drawRunwayMarkings } from './runwayMarkings';
+import { roadLabel } from '@/services/RoadService';
 import type { Airport, AirportLayer, OsmWay } from '@/types/airport';
 import type { Waypoint, STAR } from '@/types/navdata';
 import { destinationPoint, toRad } from '@/utils/geo';
@@ -29,6 +34,11 @@ const C = {
   TERMINAL:         '#091509',
   TERMINAL_BORDER:  'rgba(35,70,25,0.9)',
   TERMINAL_LABEL:   'rgba(60,110,50,0.8)',
+  AD_BOUNDARY:      'rgba(70,120,70,0.45)',
+  HANGAR:           '#0b170d',
+  HANGAR_BORDER:    'rgba(45,85,35,0.8)',
+  TOWER:            'rgba(120,200,120,0.9)',
+  GATE:             'rgba(90,150,90,0.75)',
 
   ILS_CONE:         'rgba(68,136,255,0.40)',
   ILS_CTR:          'rgba(68,136,255,0.20)',
@@ -48,20 +58,45 @@ const C = {
   AC_WHITE:         '#cccccc',
   CONFLICT:         '#ff3333',
   WARNING:          '#ffaa00',
+
+  LIVE:             'rgba(170,190,180,0.85)',
+  LIVE_LABEL:       'rgba(150,170,160,0.85)',
+  LIVE_TRAIL:       'rgba(150,170,160,',
+  LIVE_INBOUND:     'rgba(120,215,255,0.95)',
+  LIVE_OUTBOUND:    'rgba(255,190,90,0.95)',
+  TRACK:            'rgba(255,110,0,0.95)',   // kräftiges Orange, hebt sich von STAR (violett), ILS (blau) und Abflügen (blasses Gelborange) ab
+  TRACK_HALO:       'rgba(0,0,0,0.7)',
+  DAY_IN:           'rgba(120,215,255,0.28)',
+  DAY_OUT:          'rgba(255,190,90,0.28)',
 };
+
+// Echte Flieger: Beschriftung nur unterhalb dieser Höhe (darüber Überflieger ohne Bezug zum Platz)
+const LIVE_LABEL_MAX_FT = 20000;
 
 export interface DisplayOptions {
   labels: boolean;
   ilsCones: boolean;
   waypoints: boolean;
+  /** Auch Punkte, die nur auf STARs inaktiver Bahnen liegen */
+  allNavaids: boolean;
   stars: boolean;
+  /** Markante Bauwerke (Hochhäuser, Türme, große Stadien) */
+  landmarks: boolean;
+  /** Autobahnen als Orientierungslinien */
+  roads: boolean;
+  /** Niederschlagsradar des DWD */
+  rain?: boolean;
 }
 
 export const DEFAULT_DISPLAY: DisplayOptions = {
   labels: true,
   ilsCones: true,
   waypoints: true,
+  allNavaids: false,
   stars: true,
+  landmarks: true,
+  roads: true,
+  rain: false,
 };
 
 export interface RenderOptions {
@@ -76,11 +111,26 @@ export interface RenderOptions {
   trailLength: number;
   viewLat: number;
   viewLng: number;
+  /** 3D: Höhe des Blickpunkts (verfolgter Flieger), sonst Boden */
+  viewAltFt?: number;
   previewHeading?: { aircraftId: string; targetHdg: number; direction?: 'left' | 'right' } | null;
   previewAltitude?: { aircraftId: string; targetAlt: number } | null;
   stars: STAR[];
   display: DisplayOptions;
   activeRunwayIds: string[];
+  /** Echte Flieger (LIVE), nicht gelotst; inbound: Anflüge zum Platz, die man übernehmen kann (hex → Info) */
+  live?: { aircraft: LiveAircraft[]; trails: Map<string, TrailPoint[]>; inbound: Map<string, LiveInbound> };
+  /** WATCH: vergangene Flugbahn des gewählten Fliegers */
+  track?: { hex: string; points: Array<{ lat: number; lng: number; altFt: number | null; ts?: number; est?: boolean }> } | null;
+  /** WATCH TAG: alle Starts und Landungen eines Tages als Linien (schon nach IN/OUT gefiltert) */
+  dayTracks?: import('@/services/LiveTrafficService').DayFlight[];
+  /** WATCH: Ortschaften mit Umriss und Namen */
+  towns?: import('@/services/TownService').Town[];
+  /** Markante Bauwerke rund um den Platz */
+  landmarks?: import('@/services/LandmarkService').Landmark[];
+  roads?: import('@/services/RoadService').Road[];
+  /** WATCH: Standort des Zuschauers (GPS) */
+  spectator?: { lat: number; lng: number } | null;
 }
 
 export class RadarRenderer {
@@ -144,6 +194,18 @@ export class RadarRenderer {
     const apPx = ll2c(opts.airport.lat, opts.airport.lng);
 
     // ── Back → Front ────────────────────────────────────────────────────────
+    if (opts.display.rain) {
+      // Ausschnitt gerastert, damit beim Verschieben und Zoomen nicht ständig neu geladen wird
+      const rad = [60, 120, 240, 480].find((r) => r >= opts.rangeNM * 1.5) ?? 480;
+      const q = rad / 120;
+      const r = rainImage(Math.round(cLat / q) * q, Math.round(cLng / q) * q, rad, 1024);
+      if (r) {
+        const a = ll2c(r.box.north, r.box.west), b = ll2c(r.box.south, r.box.east);
+        ctx.save(); ctx.globalAlpha = 0.55;
+        ctx.drawImage(r.img, a.x, a.y, b.x - a.x, b.y - a.y);
+        ctx.restore();
+      }
+    }
     this.drawRangeRings(opts.rangeNM, scale, apPx.x, apPx.y);
     if (opts.sweepEnabled) this.drawSweep(opts.now, apPx.x, apPx.y);
 
@@ -152,6 +214,7 @@ export class RadarRenderer {
       if (opts.rangeNM <= 18) this.drawPolygons(opts.airport.layer.terminals, ll2c, C.TERMINAL, C.TERMINAL_BORDER, 1);
       if (opts.rangeNM <= 20) this.drawTaxiways(opts.airport.layer, ll2c, scale, opts.rangeNM);
       if (opts.rangeNM <= 18) this.drawTerminalLabels(opts.airport.layer, ll2c);
+      this.drawAirportExtras(opts.airport.layer, ll2c, opts.rangeNM);
     }
 
     this.drawRunways(opts.airport, ll2c, scale, opts.rangeNM);
@@ -171,7 +234,9 @@ export class RadarRenderer {
       this.drawWaypoints(opts.waypoints, ll2c, W, H);
     }
 
-    const acMap = new Map(opts.aircraft.map((a) => [a.id, a]));
+    // Konflikte auch mit echten Fliegern (Kennung live-<hex>)
+    const acMap = new Map<string, { lat: number; lng: number }>(opts.aircraft.map((a) => [a.id, a]));
+    for (const ac of opts.live?.aircraft ?? []) acMap.set(`live-${ac.hex}`, ac);
     this.drawConflicts(opts.conflicts, acMap, ll2c);
 
     // Predicted track arc (drawn below aircraft symbols)
@@ -186,8 +251,57 @@ export class RadarRenderer {
       if (previewAc) this.drawAltitudeReachCircle(previewAc, opts.previewAltitude.targetAlt, ll2c);
     }
 
+    if (opts.towns?.length) drawTowns(ctx, opts.towns, ll2c, W, H);
+    if (opts.dayTracks?.length) {
+      // Tageslinien dünn und durchscheinend: Anflüge hellblau, Abflüge gelborange
+      ctx.lineWidth = 1;
+      for (const dir of ['in', 'out'] as const) {
+        ctx.strokeStyle = dir === 'in' ? C.DAY_IN : C.DAY_OUT;
+        ctx.beginPath();
+        for (const f of opts.dayTracks) {
+          if (f.dir !== dir) continue;
+          f.p.forEach(([lat, lng], i) => { const c = ll2c(lat, lng); if (i === 0) ctx.moveTo(c.x, c.y); else ctx.lineTo(c.x, c.y); });
+        }
+        ctx.stroke();
+      }
+    }
+    if (opts.roads?.length) drawRoads(ctx, opts.roads, ll2c, W, H, opts.rangeNM, opts.display.labels);
+    if (opts.landmarks?.length) drawLandmarks2D(ctx, opts.landmarks, ll2c, W, H, opts.rangeNM, opts.display.labels);
+    if (opts.spectator) drawSpectator(ctx, ll2c(opts.spectator.lat, opts.spectator.lng));
+    if (opts.track && opts.live) {
+      // Bisherige Flugbahn bis zur aktuellen Position
+      const now = opts.live.aircraft.find((a) => a.hex === opts.track!.hex);
+      const raw = [...opts.track.points, ...(now ? [now] : [])];
+      const pts = raw.map((p) => ll2c(p.lat, p.lng));
+      // Gemessen durchgezogen, geschätzt (Ozean ohne Empfang) gestrichelt; dunkler Rand für Kontrast
+      const tp = opts.track.points;
+      const isEst = (i: number) => i < tp.length && tp[i].est === true;
+      ctx.lineCap = 'round';
+      for (const [color, width] of [[C.TRACK_HALO, 5], [C.TRACK, 2.5]] as const) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        for (const est of [false, true]) {
+          ctx.setLineDash(est ? [7, 6] : []);
+          ctx.beginPath();
+          for (let i = 1; i < pts.length; i++) {
+            if ((isEst(i - 1) || isEst(i)) !== est) continue;
+            ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+            ctx.lineTo(pts[i].x, pts[i].y);
+          }
+          ctx.stroke();
+        }
+      }
+      ctx.setLineDash([]);
+      ctx.lineCap = 'butt';
+    }
+    if (opts.live) this.drawLive(opts.live, ll2c, W, H, opts.trailLength, opts.display.labels, opts.now, opts.selectedId);
+
     for (const ac of opts.aircraft) this.drawTrail(ac, ll2c, opts.trailLength);
-    for (const ac of opts.aircraft) this.drawAircraft(ac, ll2c, ac.id === opts.selectedId, W, H, opts.display.labels);
+    for (const ac of opts.aircraft) {
+      const selected = ac.id === opts.selectedId;
+      const route = selected && ac.starId ? opts.stars.find((s) => s.id === ac.starId) : undefined;
+      this.drawAircraft(ac, ll2c, selected, W, H, opts.display.labels, route);
+    }
 
     // Compass border
     ctx.strokeStyle = C.COMPASS;
@@ -200,9 +314,81 @@ export class RadarRenderer {
     ctx.fillStyle = 'rgba(0,255,136,0.35)';
     ctx.font = '11px "Courier New"';
     ctx.textAlign = 'left';
-    ctx.fillText(`${opts.rangeNM.toFixed(0)} NM`, 8, 18);
+    ctx.fillText(`${opts.rangeNM.toFixed(opts.rangeNM < 2 ? 1 : 0)} NM`, 8, 18);
+
+    // Quellenhinweis für Live-Daten und OSM-Daten (ODbL)
+    const credit = sourceCredit(opts);
+    if (credit) {
+      ctx.fillStyle = 'rgba(150,170,160,0.6)';
+      ctx.fillText(credit, 8, H - 8);
+    }
 
     ctx.restore();
+  }
+
+  // ── Echte Flieger (LIVE) ────────────────────────────────────────────────────
+  private drawLive(
+    live: NonNullable<RenderOptions['live']>,
+    ll2c: (lat: number, lng: number) => { x: number; y: number },
+    W: number, H: number,
+    trailLength: number,
+    showLabels: boolean,
+    now: number,
+    selectedId: string | null,
+  ): void {
+    const { ctx } = this;
+    for (const ac of live.aircraft) {
+      const p = ll2c(ac.lat, ac.lng);
+      if (p.x < -40 || p.x > W + 40 || p.y < -40 || p.y > H + 40) continue;
+      // Anflug zum Platz: hellblau und immer beschriftet; hat er sich gemeldet, blinkt er bis zur Übernahme.
+      // WATCH: Abflüge vom Platz orange, gewählter Flieger mit Kreis und immer beschriftet
+      const inbound = live.inbound.get(ac.hex);
+      const selected = selectedId === `live-${ac.hex}`;
+      const color = inbound?.out ? C.LIVE_OUTBOUND : inbound ? C.LIVE_INBOUND : C.LIVE;
+      if (selected) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      const trail = (live.trails.get(ac.hex) ?? []).slice(-trailLength);
+      trail.forEach((t, i) => {
+        const q = ll2c(t.lat, t.lng);
+        ctx.fillStyle = `${C.LIVE_TRAIL}${((i + 1) / trail.length) * 0.35})`;
+        ctx.fillRect(q.x - 1, q.y - 1, 2, 2);
+      });
+
+      // Radarziel als Quadrat mit Vektor für eine Minute Flugweg
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(p.x - 3, p.y - 3, 6, 6);
+      if (inbound?.called && Math.floor(now / 500) % 2 === 0) {
+        ctx.fillStyle = color;
+        ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+      }
+      if (ac.gs !== null && ac.track !== null) {
+        const ahead = destinationPoint(ac.lat, ac.lng, ac.track, ac.gs / 60);
+        const q = ll2c(ahead.lat, ahead.lng);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(q.x, q.y);
+        ctx.stroke();
+      }
+
+      if (ac.altFt !== null && (selected || (showLabels && (inbound || ac.altFt < LIVE_LABEL_MAX_FT)))) {
+        const fl = Math.round(ac.altFt / 100).toString().padStart(3, '0');
+        const vs = (ac.vs ?? 0) > 300 ? '↑' : (ac.vs ?? 0) < -300 ? '↓' : '→';
+        ctx.fillStyle = inbound ? color : C.LIVE_LABEL;
+        ctx.font = '10px "Courier New"';
+        ctx.textAlign = 'left';
+        // Anflüge mit Startplatz (ohne bekannte Route "?"), Abflüge mit Ziel
+        const from = inbound?.out ? ` →${inbound.dest ?? ''}` : inbound ? ` ${inbound.guess ? '?' : inbound.origin ?? ''}` : '';
+        ctx.fillText(`${ac.callsign}${from}`, p.x + 8, p.y - 3);
+        ctx.fillText(`FL${fl} ${vs} ${ac.gs !== null ? Math.round(ac.gs) : ''}`, p.x + 8, p.y + 8);
+      }
+    }
   }
 
   // ── Coordinate factory ────────────────────────────────────────────────────
@@ -218,7 +404,9 @@ export class RadarRenderer {
   // ── Range rings ───────────────────────────────────────────────────────────
   private drawRangeRings(rangeNM: number, scale: number, cx: number, cy: number): void {
     const { ctx } = this;
-    const interval = rangeNM <= 4  ? 0.5
+    const interval = rangeNM <= 0.5 ? 0.1
+                   : rangeNM <= 1 ? 0.25
+                   : rangeNM <= 4  ? 0.5
                    : rangeNM <= 8  ? 1
                    : rangeNM <= 15 ? 2
                    : rangeNM <= 30 ? 5
@@ -290,6 +478,49 @@ export class RadarRenderer {
     }
   }
 
+  /** Platzgrenze, Hangars, Tower und Gates (OSM) */
+  private drawAirportExtras(
+    layer: AirportLayer,
+    ll2c: (lat: number, lng: number) => { x: number; y: number },
+    rangeNM: number
+  ): void {
+    const { ctx } = this;
+    if (rangeNM <= 40 && layer.boundary?.length) {
+      ctx.save();
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = C.AD_BOUNDARY;
+      ctx.lineWidth = 1;
+      for (const w of layer.boundary) {
+        ctx.beginPath();
+        w.geometry.forEach((p, i) => { const q = ll2c(p.lat, p.lng); if (i === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y); });
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (rangeNM <= 18 && layer.hangars) this.drawPolygons(layer.hangars, ll2c, C.HANGAR, C.HANGAR_BORDER, 0.8);
+    if (rangeNM <= 25) {
+      for (const t of layer.towers ?? []) {
+        if (t.footprint && rangeNM <= 4) this.drawPolygons([t.footprint], ll2c, C.TOWER, C.TOWER, 1);
+        const p = ll2c(t.lat, t.lng);
+        ctx.fillStyle = C.TOWER;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        if (rangeNM <= 12) {
+          ctx.font = '9px "Courier New"';
+          ctx.textAlign = 'left';
+          ctx.fillText(t.label, p.x + 5, p.y + 3);
+        }
+      }
+    }
+    if (rangeNM <= 2 && layer.gates) {
+      ctx.fillStyle = C.GATE;
+      ctx.font = '8px "Courier New"';
+      ctx.textAlign = 'center';
+      for (const g of layer.gates) { const p = ll2c(g.lat, g.lng); ctx.fillText(g.ref, p.x, p.y + 3); }
+    }
+  }
+
   private drawTerminalLabels(
     layer: AirportLayer,
     ll2c: (lat: number, lng: number) => { x: number; y: number }
@@ -298,8 +529,13 @@ export class RadarRenderer {
     ctx.fillStyle = C.TERMINAL_LABEL;
     ctx.font = '9px "Courier New"';
     ctx.textAlign = 'center';
+    // Teile mit demselben Namen nur einmal beschriften (am Teil mit den meisten Punkten)
+    const best = new Map<string, OsmWay>();
     for (const t of layer.terminals) {
-      if (!t.tags.name && !t.tags.ref) continue;
+      const name = t.tags.name ?? t.tags.ref;
+      if (name && (!best.get(name) || t.geometry.length > best.get(name)!.geometry.length)) best.set(name, t);
+    }
+    for (const t of best.values()) {
       const lats = t.geometry.map((p) => p.lat);
       const lngs = t.geometry.map((p) => p.lng);
       const midLat = (Math.max(...lats) + Math.min(...lats)) / 2;
@@ -364,40 +600,20 @@ export class RadarRenderer {
       const len = Math.sqrt(dx * dx + dy * dy);
       if (len < 0.5) continue;
 
-      const widthPx = Math.max(2, (rwy.widthM / 1852) * scale);
-      const nx = -dy / len, ny = dx / len;
-
-      // Surface
-      ctx.beginPath();
-      ctx.moveTo(p1.x + nx * widthPx / 2, p1.y + ny * widthPx / 2);
-      ctx.lineTo(p2.x + nx * widthPx / 2, p2.y + ny * widthPx / 2);
-      ctx.lineTo(p2.x - nx * widthPx / 2, p2.y - ny * widthPx / 2);
-      ctx.lineTo(p1.x - nx * widthPx / 2, p1.y - ny * widthPx / 2);
-      ctx.closePath();
-      ctx.fillStyle   = rangeNM <= 20 ? '#1c2a1c' : '#111';
-      ctx.fill();
-      ctx.strokeStyle = C.RWY_EDGE;
-      ctx.lineWidth   = 0.8;
-      ctx.stroke();
-
-      // Centreline dashes (close range only)
-      if (rangeNM <= 12 && len > 30) {
-        ctx.save();
-        ctx.strokeStyle = C.RWY_CTR;
-        ctx.lineWidth   = 0.6;
-        ctx.setLineDash([Math.max(5, len * 0.04), Math.max(4, len * 0.03)]);
+      // Fläche in echter Breite, Markierungen je nach Platz im Bild (runwayMarkings.ts)
+      const pxPerM = scale / 1852;
+      const ux = dx / len, uy = dy / len;
+      const P = (a: number, c: number) => ({ x: p1.x + (ux * a - uy * c) * pxPerM, y: p1.y + (uy * a + ux * c) * pxPerM });
+      const widthM = Math.max(rwy.widthM, 2 / pxPerM);
+      drawRunwayMarkings(ctx, P, len / pxPerM, widthM, rwy.id, rwy.recipId, pxPerM,
+        rangeNM <= 20 ? '#2a332a' : '#1a1a1a', 'rgba(235,235,235,0.85)');
+      if (widthM * pxPerM < 4) {
+        ctx.strokeStyle = C.RWY_EDGE;
+        ctx.lineWidth = 0.8;
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
         ctx.lineTo(p2.x, p2.y);
         ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
-      }
-
-      // Threshold bars
-      if (rangeNM <= 30) {
-        this.drawThresholdBar(p1, p2, widthPx);
-        this.drawThresholdBar(p2, p1, widthPx);
       }
 
       // Departure arrow for departure-only runways
@@ -420,36 +636,19 @@ export class RadarRenderer {
         ctx.restore();
       }
 
-      // Labels
+      // Labels (entfallen, sobald die aufgemalte Bezeichnung lesbar ist)
+      if (9 * pxPerM >= 10) continue;
       const labelFontSize = rangeNM <= 12 ? 11 : 9;
       ctx.fillStyle = C.RWY_LABEL;
       ctx.font = `bold ${labelFontSize}px "Courier New"`;
       ctx.textAlign = 'center';
       const labelOffset = Math.max(10, len * 0.1);
-      const ux = dx / len, uy = dy / len;
-      ctx.fillText(rwy.id,     p2.x - ux * labelOffset, p2.y - uy * labelOffset + 4);
+      // Kennung steht an ihrer eigenen Schwelle (p1), die Gegenrichtung am anderen Ende (p2)
+      ctx.fillText(rwy.id,     p1.x + ux * labelOffset, p1.y + uy * labelOffset + 4);
       if (rwy.id !== rwy.recipId) {
-        ctx.fillText(rwy.recipId, p1.x + ux * labelOffset, p1.y + uy * labelOffset + 4);
+        ctx.fillText(rwy.recipId, p2.x - ux * labelOffset, p2.y - uy * labelOffset + 4);
       }
     }
-  }
-
-  private drawThresholdBar(
-    near: { x: number; y: number },
-    far:  { x: number; y: number },
-    widthPx: number
-  ): void {
-    const { ctx } = this;
-    const dx = far.x - near.x, dy = far.y - near.y;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len === 0) return;
-    const nx = -dy / len, ny = dx / len;
-    ctx.strokeStyle = C.RWY_THR;
-    ctx.lineWidth   = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(near.x + nx * widthPx / 2, near.y + ny * widthPx / 2);
-    ctx.lineTo(near.x - nx * widthPx / 2, near.y - ny * widthPx / 2);
-    ctx.stroke();
   }
 
   // ── ILS cones ─────────────────────────────────────────────────────────────
@@ -516,7 +715,9 @@ export class RadarRenderer {
     ctx.textAlign  = 'left';
     const lx = thr.x + Math.sin(toRad(appFrom)) * 14;
     const ly = thr.y - Math.cos(toRad(appFrom)) * 14;
-    ctx.fillText(`ILS ${rwy.id} ${rwy.ils.frequencyMHz.toFixed(2)} Cat${rwy.ils.category}`, lx, ly);
+    // Frequenz 0 = unbekannt (angenommenes ILS aus freien Daten)
+    const freq = rwy.ils.frequencyMHz > 0 ? ` ${rwy.ils.frequencyMHz.toFixed(2)}` : '';
+    ctx.fillText(`ILS ${rwy.id}${freq} Cat${rwy.ils.category}`, lx, ly);
   }
 
   // ── STAR routes ───────────────────────────────────────────────────────────
@@ -529,6 +730,7 @@ export class RadarRenderer {
     ctx.strokeStyle = 'rgba(180,120,255,0.45)';
     ctx.lineWidth = 1;
     ctx.setLineDash([6, 5]);
+    const labelled = new Set<string>();
     for (const star of stars) {
       const pts = star.waypoints;
       if (pts.length < 2) continue;
@@ -540,12 +742,15 @@ export class RadarRenderer {
         ctx.lineTo(p.x, p.y);
       }
       ctx.stroke();
-      // STAR id label at first waypoint
+      // STAR name label at first waypoint (once per name, runway variants share it)
+      const label = star.name ?? star.id;
+      if (labelled.has(label)) continue;
+      labelled.add(label);
       ctx.setLineDash([]);
       ctx.fillStyle = 'rgba(180,120,255,0.70)';
       ctx.font = '8px "Courier New"';
       ctx.textAlign = 'left';
-      ctx.fillText(star.id, first.x + 5, first.y - 4);
+      ctx.fillText(label, first.x + 5, first.y - 4);
       ctx.setLineDash([6, 5]);
     }
     ctx.restore();
@@ -594,7 +799,7 @@ export class RadarRenderer {
   // ── Conflict lines ─────────────────────────────────────────────────────────
   private drawConflicts(
     conflicts: ConflictPair[],
-    acMap: Map<string, Aircraft>,
+    acMap: Map<string, { lat: number; lng: number }>,
     ll2c: (lat: number, lng: number) => { x: number; y: number }
   ): void {
     const { ctx } = this;
@@ -764,11 +969,43 @@ export class RadarRenderer {
     ll2c: (lat: number, lng: number) => { x: number; y: number },
     selected: boolean,
     W: number, H: number,
-    showLabel = true
+    showLabel = true,
+    route?: STAR,
   ): void {
     const { ctx } = this;
     const p = ll2c(ac.lat, ac.lng);
     if (p.x < -40 || p.x > W + 40 || p.y < -40 || p.y > H + 40) return;
+
+    // Restliche STAR-Route des ausgewählten Fliegers hervorheben
+    if (route && ac.state === 'enroute' && !ac.directTo && !ac.clearedILS) {
+      const rest = route.waypoints.slice(ac.starLegIndex ?? 0);
+      if (rest.length > 0) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(200,150,255,0.85)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        for (const w of rest) {
+          const q = ll2c(w.lat, w.lng);
+          ctx.lineTo(q.x, q.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Direct-to-Linie zum Zielpunkt (nur ausgewählter Flieger)
+    if (selected && ac.directTo) {
+      const t = ll2c(ac.directTo.lat, ac.directTo.lng);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,220,80,0.6)';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(t.x, t.y);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     let color = C.AC_GREEN;
     if (ac.conflict)     color = C.AC_RED;
@@ -776,18 +1013,13 @@ export class RadarRenderer {
     else if (ac.state === 'established' || ac.state === 'intercepting') color = C.AC_BLUE;
     else if (ac.state === 'vectored')    color = C.AC_YELLOW;
 
-    const size = selected ? 9 : 7;
+    const size = selected ? 12 : 10;
 
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(toRad(ac.headingDeg));
     ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(0, -size);
-    ctx.lineTo(size * 0.55, size * 0.65);
-    ctx.lineTo(0, size * 0.3);
-    ctx.lineTo(-size * 0.55, size * 0.65);
-    ctx.closePath();
+    aircraftSilhouette(ctx, size);
     ctx.fill();
     if (selected) { ctx.strokeStyle = C.AC_WHITE; ctx.lineWidth = 1.5; ctx.stroke(); }
     ctx.restore();
@@ -796,21 +1028,29 @@ export class RadarRenderer {
       const fl  = Math.round(ac.altitudeFt / 100);
       const spd = Math.round(ac.speedKts);
       const vs  = ac.verticalSpeedFpm > 100 ? '↑' : ac.verticalSpeedFpm < -100 ? '↓' : '→';
-      const wake = AIRCRAFT_TYPES[ac.type]?.wake;
+      const wake = typeData(ac.type).wake;
 
       ctx.fillStyle  = color;
       ctx.font       = `${selected ? 'bold ' : ''}11px "Courier New"`;
       ctx.textAlign  = 'left';
-      ctx.fillText(ac.callsign, p.x + 12, p.y - 4);
-      ctx.fillText(`FL${fl.toString().padStart(3, '0')} ${vs}`, p.x + 12, p.y + 8);
-      ctx.fillText(`${spd}kt`, p.x + 12, p.y + 20);
+      ctx.fillText(ac.callsign, p.x + 15, p.y - 4);
+      ctx.fillText(`FL${fl.toString().padStart(3, '0')} ${vs}`, p.x + 15, p.y + 8);
+      ctx.fillText(`${spd}kt`, p.x + 15, p.y + 20);
+      if (ac.clearedILS && ac.assignedRunway) {
+        // ILS zugewiesen → "ILS25L"; mit Landefreigabe "LND25L"; etabliert ohne Freigabe orange
+        const tag = `${ac.clearedToLand ? 'LND' : 'ILS'}${ac.assignedRunway}`;
+        const tagX = p.x + 15 + ctx.measureText(`${spd}kt `).width;
+        ctx.fillStyle = ac.clearedToLand ? '#00ff88' : ac.state === 'established' ? '#ffaa00' : '#4488ff';
+        ctx.fillText(tag, tagX, p.y + 20);
+        ctx.fillStyle = color;
+      }
 
       // Wake turbulence badge for Heavy / Super
       if (wake === 'H' || wake === 'J') {
         const badgeColor = wake === 'J' ? '#ff6666' : '#ffaa00';
         ctx.font = 'bold 9px "Courier New"';
         ctx.fillStyle = badgeColor;
-        ctx.fillText(wake, p.x + 12, p.y + 30);
+        ctx.fillText(wake, p.x + 15, p.y + 30);
       }
     }
 
@@ -818,8 +1058,183 @@ export class RadarRenderer {
       ctx.strokeStyle = color;
       ctx.lineWidth   = 1;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, 16, 0, Math.PI * 2);
       ctx.stroke();
     }
   }
+}
+
+/** Standort des Zuschauers: Fadenkreuz mit "YOU" */
+export function drawSpectator(ctx: CanvasRenderingContext2D, p: { x: number; y: number }): void {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,120,220,0.95)';
+  ctx.fillStyle = 'rgba(255,120,220,0.95)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+  ctx.moveTo(p.x - 11, p.y); ctx.lineTo(p.x - 3, p.y);
+  ctx.moveTo(p.x + 3, p.y); ctx.lineTo(p.x + 11, p.y);
+  ctx.moveTo(p.x, p.y - 11); ctx.lineTo(p.x, p.y - 3);
+  ctx.moveTo(p.x, p.y + 3); ctx.lineTo(p.x, p.y + 11);
+  ctx.stroke();
+  ctx.font = 'bold 10px "Courier New"';
+  ctx.textAlign = 'left';
+  ctx.fillText('YOU', p.x + 9, p.y + 14);
+  ctx.restore();
+}
+
+// Orte bewusst blass, damit sie den Verkehr nicht überdecken
+const TOWN_LINE = '150,130,210';
+const TOWN_LINE_ALPHA = 0.2;
+const TOWN_LABEL_ALPHA = 0.45;
+
+/**
+ * Ortschaften: Umriss gestrichelt, Name am Ortskern, größere Orte größer beschriftet.
+ * fade (3D): Sichtbarkeit 0..1 je Ort nach Entfernung zur Kamera (aus der Tiefe des Ortskerns).
+ */
+export function drawTowns(
+  ctx: CanvasRenderingContext2D,
+  towns: import('@/services/TownService').Town[],
+  ll2c: (lat: number, lng: number) => { x: number; y: number; depth?: number } | null,
+  W: number, H: number,
+  fade?: (depth: number) => number,
+): void {
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.textAlign = 'center';
+  for (const t of towns) {
+    const c = ll2c(t.lat, t.lng);
+    const vis = fade ? (c?.depth !== undefined ? fade(c.depth) : 0) : 1;
+    if (vis <= 0.01) continue;
+    ctx.strokeStyle = `rgba(${TOWN_LINE},${TOWN_LINE_ALPHA * vis})`;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    for (const ring of t.rings) {
+      let pen = false;
+      for (const [lat, lng] of ring) {
+        const p = ll2c(lat, lng);
+        if (!p) { pen = false; continue; }
+        if (pen) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+        pen = true;
+      }
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (!c || c.x < -50 || c.x > W + 50 || c.y < -20 || c.y > H + 20) continue;
+    ctx.fillStyle = `rgba(175,160,225,${TOWN_LABEL_ALPHA * vis})`;
+    ctx.font = `${t.pop >= 100_000 ? 'bold 11px' : t.pop >= 20_000 ? '10px' : '9px'} "Courier New"`;
+    ctx.fillText(t.name.toUpperCase(), c.x, c.y + 3);
+  }
+  ctx.restore();
+}
+
+export const LANDMARK_RGB = '215,205,170';
+export const ROAD_RGB = '205,150,95';
+
+/**
+ * Autobahnen als dezente Linien mit Nummernschild (blau wie in Deutschland), für 2D und 3D: ll2c bildet
+ * auf den Bildschirm ab (null hinter der Kamera). Schilder in festem Bildabstand entlang der Linie.
+ */
+export function drawRoads(
+  ctx: CanvasRenderingContext2D,
+  roads: import('@/services/RoadService').Road[],
+  ll2c: (lat: number, lng: number) => { x: number; y: number } | null,
+  W: number, H: number, rangeNM: number, labels: boolean,
+): void {
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = rangeNM <= 10 ? 2 : 1.2;
+  ctx.strokeStyle = `rgba(${ROAD_RGB},${rangeNM <= 10 ? 0.45 : 0.32})`;
+  const signs: Array<{ x: number; y: number; t: string }> = [];
+  const SIGN_EVERY_PX = 260;
+  for (const r of roads) {
+    const t = roadLabel(r.ref);
+    for (const line of r.lines) {
+      ctx.beginPath();
+      let pen = false, prev: { x: number; y: number } | null = null, run = SIGN_EVERY_PX / 2;
+      for (const [lat, lng] of line) {
+        const p = ll2c(lat, lng);
+        if (!p) { pen = false; prev = null; continue; }
+        if (pen) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+        pen = true;
+        if (prev && t) {
+          run += Math.hypot(p.x - prev.x, p.y - prev.y);
+          if (run >= SIGN_EVERY_PX && p.x > 20 && p.x < W - 20 && p.y > 20 && p.y < H - 20) { signs.push({ x: p.x, y: p.y, t }); run = 0; }
+        }
+        prev = p;
+      }
+      ctx.stroke();
+    }
+  }
+  if (labels && rangeNM <= 60) {
+    ctx.font = 'bold 9px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const placed: Array<{ x: number; y: number }> = [];
+    for (const s of signs) {
+      if (placed.some((q) => Math.abs(q.x - s.x) < 40 && Math.abs(q.y - s.y) < 16)) continue;
+      placed.push(s);
+      const w = ctx.measureText(s.t).width + 6;
+      ctx.fillStyle = 'rgba(20,60,150,0.8)';
+      ctx.fillRect(s.x - w / 2, s.y - 6, w, 12);
+      ctx.strokeStyle = 'rgba(230,230,230,0.7)';
+      ctx.lineWidth = 0.8;
+      ctx.strokeRect(s.x - w / 2, s.y - 6, w, 12);
+      ctx.fillStyle = 'rgba(240,240,240,0.9)';
+      ctx.fillText(s.t, s.x, s.y + 0.5);
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * Markante Bauwerke im 2D-Radar: dezent gefüllter Grundriss (Punkte als kleines Dreieck),
+ * Name und Höhe nur bei kleinem Ausschnitt, damit das Radarbild ruhig bleibt.
+ */
+export function drawLandmarks2D(
+  ctx: CanvasRenderingContext2D,
+  landmarks: import('@/services/LandmarkService').Landmark[],
+  ll2c: (lat: number, lng: number) => { x: number; y: number },
+  W: number, H: number, rangeNM: number, labels: boolean,
+): void {
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.fillStyle = `rgba(${LANDMARK_RGB},0.14)`;
+  ctx.strokeStyle = `rgba(${LANDMARK_RGB},0.4)`;
+  for (const l of landmarks) {
+    const c = ll2c(l.lat, l.lng);
+    if (c.x < -100 || c.x > W + 100 || c.y < -100 || c.y > H + 100) continue;
+    if (l.rings.length) {
+      ctx.beginPath();
+      for (const ring of l.rings) {
+        ring.forEach(([lat, lng], i) => { const p = ll2c(lat, lng); if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y); });
+        ctx.closePath();
+      }
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y - 4); ctx.lineTo(c.x + 3, c.y + 2); ctx.lineTo(c.x - 3, c.y + 2); ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  // Beschriftung: bis 20 NM die höchsten bzw. Stadien, ab 10 NM alle mit Namen
+  if (labels && rangeNM <= 20) {
+    ctx.font = '9px "Courier New"';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = `rgba(${LANDMARK_RGB},0.6)`;
+    for (const l of landmarks) {
+      if (!l.name || (rangeNM > 10 && l.kind !== 'stadium' && l.heightM < 180)) continue;
+      const c = ll2c(l.lat, l.lng);
+      if (c.x < 0 || c.x > W || c.y < 0 || c.y > H) continue;
+      ctx.fillText(`${l.name.toUpperCase()} ${Math.round((l.heightM * 3.281) / 10) * 10}FT`, c.x + 6, c.y - 4);
+    }
+  }
+  ctx.restore();
+}
+
+/** Quellenhinweis (ODbL) für alles, was gerade zu sehen ist; leer, wenn nichts davon */
+export function sourceCredit(o: RenderOptions): string {
+  const osm = [o.towns?.length ? 'Orte' : '', o.landmarks?.length ? 'Bauwerke' : '', o.roads?.length ? 'Autobahnen' : ''].filter(Boolean).join(', ');
+  return [o.live || o.dayTracks?.length ? 'Traffic: adsb.fi · adsb.lol (ODbL)' : '', osm ? `${osm}: © OpenStreetMap` : '', o.display.rain ? RAIN_CREDIT : ''].filter(Boolean).join(' · ');
 }

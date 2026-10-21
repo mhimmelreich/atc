@@ -1,0 +1,45 @@
+// filepath: src/services/LiveTrafficService.ts
+// Echter Verkehr um den Platz (Server-Route /api/traffic, Daten von adsb.lol unter ODbL)
+import type { LiveAircraft } from '@/types/live';
+
+export const LIVE_POLL_MS = 5000;
+
+/** opts (Favoriten-Radar): nm = benötigter Umkreis, all = auch Kleinflieger, Hubschrauber, Segler */
+export async function fetchLiveTraffic(lat: number, lng: number, opts?: { nm: number; all: boolean }): Promise<LiveAircraft[]> {
+  const extra = opts ? `&nm=${Math.ceil(opts.nm)}${opts.all ? '&all=1' : ''}` : '';
+  const res = await fetch(`${import.meta.env.BASE_URL}api/traffic?lat=${lat.toFixed(2)}&lon=${lng.toFixed(2)}${extra}`);
+  if (!res.ok) throw new Error(`Live-Verkehr: HTTP ${res.status}`);
+  const data = await res.json() as { aircraft: Array<Omit<LiveAircraft, 'ts'> & { age: number }> };
+  const now = Date.now();
+  return data.aircraft.map(({ age, ...a }) => ({ ...a, ts: now - age * 1000 }));
+}
+
+/** Punkt der vergangenen Flugbahn; altFt null am Boden */
+/** est: geschätzt (Lücke ohne Empfang, z. B. über dem Atlantik nach NAT-Track) */
+export interface TracePoint { lat: number; lng: number; altFt: number | null; ts: number; est?: boolean }
+
+/** Vergangene Flugbahn des laufenden Flugs (WATCH, Trace-Dateien von adsb.lol) */
+export async function fetchTrace(hex: string): Promise<TracePoint[]> {
+  const res = await fetch(`${import.meta.env.BASE_URL}api/traffic/trace/${hex}`);
+  if (!res.ok) throw new Error(`Flugbahn: HTTP ${res.status}`);
+  const data = await res.json() as { points: Array<[number, number, number | null, number, 1?]> };
+  return data.points.map(([lat, lng, altFt, ts, est]) => ({ lat, lng, altFt, ts, ...(est ? { est: true } : {}) }));
+}
+
+/** WATCH TAG: ein aufgezeichneter Start oder eine Landung; Punkte [lat, lng, ALT (null am Boden), s seit t0] */
+export interface DayFlight {
+  hex: string;
+  cs: string;
+  type?: string;
+  dir: 'in' | 'out';
+  other?: string;
+  t0: number;
+  p: Array<[number, number, number | null, number]>;
+}
+
+/** Alle aufgezeichneten Starts und Landungen eines Platzes an einem Tag (YYYY-MM-DD, Ortszeit des Servers) */
+export async function fetchDayTracks(icao: string, date: string): Promise<{ recorded: boolean; flights: DayFlight[] }> {
+  const res = await fetch(`${import.meta.env.BASE_URL}api/daytracks/${icao}?date=${date}`);
+  if (!res.ok) throw new Error(`Tagesspuren: HTTP ${res.status}`);
+  return res.json() as Promise<{ recorded: boolean; flights: DayFlight[] }>;
+}
